@@ -234,18 +234,38 @@ jq -r 'select(.type=="assistant") | .message.model' $S/agent-*.jsonl | sort | un
 
 ## Install / uninstall
 
-Nothing is installed by this repository. To install it for your user, from a terminal:
+To install it for your user (all your Claude Code sessions), from a terminal:
 
 ```sh
 claude plugin marketplace add ~/Script/claude-judge-router   # adds the local marketplace "judge-router-local"
-claude plugin install judge-router@judge-router-local
+claude plugin install judge-router@judge-router-local --scope user
+claude plugin list                                                    # judge-router@judge-router-local … Status: ✔ enabled
 ```
 
-Restart Claude Code (or open a new session) for the hook to load. To remove it:
+This adds `"judge-router@judge-router-local": true` under `enabledPlugins` and a `judge-router-local` entry
+under `extraKnownMarketplaces` (a directory source pointing at this folder) to `~/.claude/settings.json`. It
+also records the plugin in `~/.claude/plugins/installed_plugins.json` and `known_marketplaces.json`. New
+sessions load the hook; sessions that are already open don't.
+
+**It runs from this folder, not from a copy.** For a directory marketplace, Claude Code 2.1.328 reads the plugin
+from this folder: `claude plugin list` shows `Read from: ~/Script/claude-judge-router`. In a real
+installed session, the debug log (`--debug=hooks`) showed
+`PreToolUse:Agent [node "~/Script/claude-judge-router/scripts/route.mjs"] (plugin judge-router@judge-router-local)`.
+So what is in this folder applies without reinstalling, including uncommitted edits:
+- changes to `scripts/` and `config.json` apply from the next subagent call;
+- changes to `hooks/hooks.json` and `commands/` apply from the next new session.
+
+The install also copies the folder to `~/.claude/plugins/cache/judge-router-local/judge-router/0.1.0/` (the
+`installPath` in `installed_plugins.json`), but the hook didn't run from that copy. If you move this folder,
+run `claude plugin marketplace update judge-router-local` or reinstall. What happens if the folder is missing
+is {{Unverified}}.
+
+To turn it off for a while, or remove it:
 
 ```sh
-claude plugin uninstall judge-router@judge-router-local
-claude plugin marketplace remove judge-router-local
+claude plugin disable judge-router@judge-router-local --scope user    # off; enable again with: claude plugin enable judge-router@judge-router-local --scope user
+claude plugin uninstall judge-router@judge-router-local --scope user  # remove the plugin
+claude plugin marketplace remove judge-router-local                   # remove the local marketplace entry
 ```
 
 To try it for one session without installing anything:
@@ -253,10 +273,6 @@ To try it for one session without installing anything:
 ```sh
 claude --plugin-dir ~/Script/claude-judge-router
 ```
-
-Installing copies the plugin into Claude Code's plugin cache. After you edit files here, run
-`claude plugin marketplace update judge-router-local` and reinstall, or keep your changes in the user config
-file below.
 
 ## Config
 
