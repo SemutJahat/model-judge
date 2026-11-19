@@ -263,7 +263,7 @@ To remove it, delete the `"statusLine"` entry from `~/.claude/settings.json` (an
 ## Try it yourself
 
 None of these install anything. They use the plugin straight from a clone of this repo
-(`git clone https://github.com/SemutJahat/claude-judge && cd claude-judge`).
+(`git clone https://github.com/SemutJahat/model-judge && cd model-judge`).
 
 **1. One-command demo** (about 30–60 s, a few cents):
 
@@ -336,12 +336,12 @@ The repo is its own marketplace, named `semutjahat`. To install model-judge for 
 Code sessions), from a terminal:
 
 ```sh
-claude plugin marketplace add SemutJahat/claude-judge
+claude plugin marketplace add SemutJahat/model-judge
 claude plugin install model-judge@semutjahat --scope user
 claude plugin list                     # model-judge@semutjahat … Scope: user · Status: ✔ enabled
 ```
 
-Or at the Claude Code prompt: `/plugin install model-judge --marketplace SemutJahat/claude-judge`.
+Or at the Claude Code prompt: `/plugin install model-judge --marketplace SemutJahat/model-judge`.
 New sessions load the plugin; sessions that are already open don't. It needs Claude Code with hook modules
 (2.1.328 has them; see [Older Claude Code](#auto-mode-why-the-call-is-not-rewritten)), Node on the PATH, and
 your Claude Code login, which the judge uses.
@@ -364,7 +364,7 @@ claude plugin marketplace remove semutjahat                   # remove the marke
 
 To try it for one session without installing anything, from a clone: `claude --plugin-dir .`
 
-**Developing it.** A clone added as a local marketplace (`claude plugin marketplace add ./claude-judge`) is read
+**Developing it.** A clone added as a local marketplace (`claude plugin marketplace add ./model-judge`) is read
 straight from that folder, not from a copy. Edits apply without reinstalling: `scripts/` and `config.json` from
 the next subagent call, and `hooks/` and `commands/` from the next new session.
 

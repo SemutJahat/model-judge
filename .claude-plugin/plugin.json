@@ -6,8 +6,8 @@
     "name": "SemutJahat",
     "url": "https://github.com/SemutJahat"
   },
-  "homepage": "https://github.com/SemutJahat/claude-judge",
-  "repository": "https://github.com/SemutJahat/claude-judge",
+  "homepage": "https://github.com/SemutJahat/model-judge",
+  "repository": "https://github.com/SemutJahat/model-judge",
   "license": "MIT",
   "keywords": [
     "subagent",
