@@ -50,7 +50,8 @@ const results = Object.fromEntries(stream
   .flatMap((m) => (Array.isArray(m.message?.content) ? m.message.content : []).filter((b) => b.type === 'tool_result'))
   .map((b) => [b.tool_use_id, b]));
 const refusals = calls.filter((c) => results[c.id]?.is_error);
-const verdicts = decisions.filter((x) => !x.event && x.status !== 'guard' && x.status !== 'not-agent');
+const verdicts = decisions.filter((x) => !x.event && !x.kind && x.status !== 'guard' && x.status !== 'not-agent');
+const nudges = decisions.filter((x) => x.kind === 'nudge');
 const applied = Object.fromEntries(decisions.filter((x) => x.event === 'applied').map((x) => [x.tool_use_id, x]));
 const requests = Object.fromEntries(decisions.filter((x) => x.event === 'request').map((x) => [x.agent_id, x]));
 
@@ -73,9 +74,18 @@ const rows = calls.map((c) => {
 });
 
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ session: sessionId, rows, refused: refusals.length, calls: calls.length, modelUsage: result?.modelUsage }, null, 2));
+  console.log(JSON.stringify({ session: sessionId, nudges, rows, refused: refusals.length, calls: calls.length, modelUsage: result?.modelUsage }, null, 2));
   process.exit(0);
 }
+
+// The delegation nudge (UserPromptSubmit), when it was on: what the judge said of the prompt.
+for (const n of nudges) {
+  console.log(`delegation nudge: ${n.status}${n.difficulty ? ` · ${n.difficulty} ${n.confidence}` : ''}` +
+    `${Array.isArray(n.parts) ? ` · ${n.parts.length} part(s)` : ''} · judge ${n.judge ?? '-'} ${typeof n.judge_ms === 'number' ? (n.judge_ms / 1000).toFixed(1) + 's' : ''}` +
+    `${n.reason ? ` · ${n.reason}` : ''}`);
+  for (const p of n.parts ?? []) console.log(`  - ${p.task} (${p.difficulty})`);
+}
+if (nudges.length) console.log('');
 
 const cols = [
   ['subagent', 'Subagent'], ['requested', 'Requested'], ['verdict', 'Judge verdict'], ['hook', 'Decision'], ['call', 'Call'],

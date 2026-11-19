@@ -1,7 +1,7 @@
 {
   "name": "model-judge",
-  "version": "0.3.0",
-  "description": "Before every subagent starts, a small judge model rates its prompt easy / medium / hard and sets the subagent's model and effort to match, overriding whatever was set.",
+  "version": "0.4.0",
+  "description": "Before every subagent starts, a small judge model rates its prompt easy / medium / hard and sets the subagent's model and effort to match, overriding whatever was set. Opt-in: suggests the main agent delegate big multi-part prompts to subagents.",
   "author": {
     "name": "SemutJahat",
     "url": "https://github.com/SemutJahat"
@@ -13,7 +13,8 @@
     "subagent",
     "model",
     "routing",
-    "hooks"
+    "hooks",
+    "delegation"
   ],
   "network": {
     "hosts": [

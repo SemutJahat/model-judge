@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// model-judge's decisions as a compact table.
+// model-judge's decisions as a compact table: subagent decisions, and delegation nudges (subagent column
+// "prompt: …", model column "N parts", result nudge / no-nudge / failed).
 //   node scripts/log.mjs              the last 10 decisions
 //   node scripts/log.mjs 25           the last 25 (also -n 25)
 //   node scripts/log.mjs --watch      the last 10, then each new decision as it happens (Ctrl-C to stop)
@@ -35,7 +36,21 @@ const COLS = [
 const fit = (s, w) => { s = String(s ?? ''); return s.length > w ? s.slice(0, w - 1) + '…' : s.padEnd(w); };
 const hhmmss = (ts) => { const d = new Date(ts); return Number.isNaN(+d) ? '' : d.toTimeString().slice(0, 8); };
 
+function nudgeRow(e) {
+  return {
+    time: hhmmss(e.ts),
+    subagent: `prompt: ${e.prompt_head ?? ''}`,
+    verdict: e.difficulty ?? '-',
+    conf: typeof e.confidence === 'number' ? e.confidence.toFixed(2) : '-',
+    model: Array.isArray(e.parts) ? `${e.parts.length} part${e.parts.length === 1 ? '' : 's'}` : '-',
+    effort: '-',
+    judge: e.judge === 'cache' ? 'cache' : typeof e.judge_ms === 'number' ? `${(e.judge_ms / 1000).toFixed(1)}s` : '-',
+    result: e.status === 'nudge' ? 'nudge' : e.status === 'failed' ? 'failed' : 'no-nudge',
+  };
+}
+
 function row(e) {
+  if (e.kind === 'nudge') return nudgeRow(e);
   // "pending": decided with apply "spawn", but no "applied" line (yet) from the hooks module
   const result = e.action === 'override' ? (e.apply === 'spawn' && !applied.has(e.tool_use_id) ? 'pending' : 'override')
     : e.status === 'unsure' ? 'unsure' : e.status === 'failed' ? 'failed' : 'skipped';

@@ -1,4 +1,5 @@
-// model-judge: the logic of the PreToolUse hook, kept free of process I/O so tests can drive it.
+// model-judge: the logic of the PreToolUse hook (and of the opt-in UserPromptSubmit delegation nudge),
+// kept free of process I/O so tests can drive it.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, appendFileSync, existsSync, writeFileSync, renameSync, readdirSync, statSync } from 'node:fs';
@@ -26,6 +27,12 @@ export const DEFAULT_CONFIG = {
   apply: 'spawn',
   cacheTtlMs: 600000,
   claudeBin: 'claude',
+  // The delegation nudge (UserPromptSubmit, scripts/nudge.mjs): off unless turned on.
+  delegationNudge: 'off',
+  nudgeMinChars: 80,            // shorter prompts (follow-ups, "yes", "go on") are never judged
+  nudgeMinDifficulty: 'medium', // the whole task must be at least this hard
+  nudgeMinConfidence: 0.7,
+  nudgeMinParts: 2,             // and split into at least this many independent parts
   routes: {
     easy: { model: 'haiku', effort: 'low' },
     medium: { model: 'sonnet', effort: 'medium' },
@@ -111,7 +118,7 @@ export function parseVerdict(text, levels) {
 
 // ---- the judges -------------------------------------------------------------------------------
 
-async function judgeViaApi(userPrompt, cfg, env, timeoutMs) {
+async function judgeViaApi(userPrompt, cfg, env, timeoutMs, system = JUDGE_SYSTEM) {
   const res = await fetch((env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages', {
     method: 'POST',
     headers: {
@@ -121,8 +128,8 @@ async function judgeViaApi(userPrompt, cfg, env, timeoutMs) {
     },
     body: JSON.stringify({
       model: cfg.judgeApiModel,
-      max_tokens: 300,
-      system: JUDGE_SYSTEM,
+      max_tokens: system === JUDGE_SYSTEM ? 300 : 700,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     }),
     signal: AbortSignal.timeout(timeoutMs),
@@ -134,14 +141,14 @@ async function judgeViaApi(userPrompt, cfg, env, timeoutMs) {
 
 // `claude -p` on the user's own login: no tools, no MCP, no settings (so no plugins, so not this hook),
 // no session saved, in an empty temp folder (a neutral name: the model sees its working folder), with MODEL_JUDGE_INNER=1 as a second guard against recursion.
-export function judgeViaCli(userPrompt, cfg, env, timeoutMs) {
+export function judgeViaCli(userPrompt, cfg, env, timeoutMs, system = JUDGE_SYSTEM) {
   return new Promise((resolve, reject) => {
     const cwd = mkdtempSync(join(tmpdir(), 'task-'));
     const args = [
       '-p', '--model', cfg.judgeModel,
       '--tools', '', '--strict-mcp-config', '--setting-sources', '',
       '--no-session-persistence', '--disable-slash-commands',
-      '--output-format', 'json', '--system-prompt', JUDGE_SYSTEM,
+      '--output-format', 'json', '--system-prompt', system,
     ];
     let out = '', err = '', done = false;
     const child = spawn(cfg.claudeBin, args, {
@@ -181,10 +188,14 @@ export function judgeViaCli(userPrompt, cfg, env, timeoutMs) {
 // Ask the judge: the API when ANTHROPIC_API_KEY is set (faster), else (or if that fails) `claude -p`.
 // Never throws: returns { verdict } or { error }, plus which judge answered and how long it took.
 export async function askJudge(input, cfg, env = process.env, impl = { api: judgeViaApi, cli: judgeViaCli }) {
+  const levels = Object.keys(cfg.routes);
+  return askModel(judgeUserPrompt(input, cfg.maxPromptChars), JUDGE_SYSTEM, (text) => parseVerdict(text, levels), cfg, env, impl);
+}
+
+// One judge question (a system prompt, a user prompt, a parser of the reply) through the API, then `claude -p`.
+async function askModel(userPrompt, system, parse, cfg, env, impl) {
   const t0 = Date.now();
   const deadline = t0 + cfg.timeoutMs;
-  const userPrompt = judgeUserPrompt(input, cfg.maxPromptChars);
-  const levels = Object.keys(cfg.routes);
   const errors = [];
   const tries = [];
   if (cfg.useApiKey && env.ANTHROPIC_API_KEY) tries.push('api');
@@ -193,8 +204,8 @@ export async function askJudge(input, cfg, env = process.env, impl = { api: judg
     const left = deadline - Date.now();
     if (left < 500) { errors.push(`${kind}: no time left`); break; }
     try {
-      const text = await impl[kind](userPrompt, cfg, env, left);
-      const v = parseVerdict(text, levels);
+      const text = await impl[kind](userPrompt, cfg, env, left, system);
+      const v = parse(text);
       if (v.error) { errors.push(`${kind}: ${v.error}`); continue; }
       return { verdict: v, judge: kind, ms: Date.now() - t0 };
     } catch (e) {
@@ -229,12 +240,16 @@ function writeCache(cache, env) {
 }
 
 export async function askJudgeCached(input, cfg, env = process.env, judge = askJudge, now = Date.now) {
+  return withCache(cacheKey(input, cfg), () => judge(input, cfg, env), cfg, env, now);
+}
+
+// The cache both judges share (cache.json): `run` is called on a miss and its verdict kept for cacheTtlMs.
+async function withCache(key, run, cfg, env, now) {
   const ttl = Number(cfg.cacheTtlMs) || 0;
-  if (ttl <= 0) return judge(input, cfg, env);
-  const key = cacheKey(input, cfg);
+  if (ttl <= 0) return run();
   const hit = readCache(env)[key];
   if (hit && now() - hit.at < ttl && hit.verdict) return { verdict: hit.verdict, judge: 'cache', ms: 0, cachedFrom: hit.judge };
-  const r = await judge(input, cfg, env);
+  const r = await run();
   if (r.verdict) {
     const cache = readCache(env);
     for (const [k, v] of Object.entries(cache)) if (!(now() - v.at < ttl)) delete cache[k];
@@ -415,4 +430,158 @@ export function writeLog(entry, env = process.env) {
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, 'decisions.jsonl'), JSON.stringify(entry) + '\n');
   } catch { /* logging must never break a subagent */ }
+}
+
+// ---- the delegation nudge (UserPromptSubmit) ----------------------------------------------------
+//
+// Opt-in ("delegationNudge": "on"). Before the main agent sees a prompt, the same judge rates the whole task and
+// lists the parts of it that could run independently. Only when the task is hard enough and splits into enough
+// parts does the hook add context suggesting the main agent delegate them to subagents. It never blocks the
+// prompt and never forces anything: no output means the prompt goes on untouched.
+
+export const NUDGE_SYSTEM = `You help a coding agent decide whether to hand parts of the user's request to subagents.
+A subagent starts with a fresh, empty context and works on its own, in parallel with others. That pays off only for big work that splits into parts which do not depend on each other; for small or tightly coupled work it only adds overhead.
+Rate the request's overall difficulty:
+easy: a quick answer, a lookup, a one-line or one-place change, conversation, a question answered from general knowledge.
+medium: ordinary engineering with bounded reasoning: a feature or fix across a few files, new code with tests, a focused review or investigation.
+hard: open-ended or deep work: design, broad refactors, hard debugging, research needing judgment.
+Then list the parts that could be done independently, at the same time, by separate agents that share nothing:
+- independent: changes to separate files or modules that don't depend on each other; several separate questions; research or a long search through a codebase or the web that can run on its own while other work goes on; separate reviews or audits.
+- NOT independent: one change in one place; steps where each needs the previous step's result; a small task; a follow-up to earlier work ("now fix that", "yes, do it"); anything that is really one piece of work.
+parts: 2 to 6 short imperative lines, one per independent part, each with its own difficulty; [] when the request does not split. Never pad the list.
+confidence: how sure you are of your whole answer (0..1).
+First say why in one short sentence, then decide. Reply with ONLY a JSON object, no prose, no code fence:
+{"why":"<one short sentence>","difficulty":"easy"|"medium"|"hard","confidence":<0..1>,"parts":[{"task":"<short line>","difficulty":"easy"|"medium"|"hard"}]}`;
+
+export function nudgeUserPrompt(prompt, maxChars = 6000) {
+  let p = String(prompt ?? '');
+  if (p.length > maxChars) p = p.slice(0, maxChars) + '\n[... truncated]';
+  return ['Should this request be split across subagents?', 'Request:', '<<<', p, '>>>'].join('\n');
+}
+
+export function parseNudge(text, levels) {
+  const v = parseVerdict(text, levels);
+  if (v.error) return v;
+  let raw;
+  try { raw = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)).parts; } catch {}
+  const parts = (Array.isArray(raw) ? raw : [])
+    .map((p) => (typeof p === 'string' ? { task: p } : p))
+    .filter((p) => p && typeof p.task === 'string' && p.task.trim())
+    .slice(0, 6)
+    .map((p) => {
+      const d = typeof p.difficulty === 'string' ? p.difficulty.toLowerCase().trim() : '';
+      return { task: clip(p.task, 160), difficulty: levels.includes(d) ? d : v.difficulty };
+    });
+  return { ...v, parts };
+}
+
+export function nudgeCacheKey(prompt, cfg) {
+  return 'nudge:' + createHash('sha256')
+    .update(JSON.stringify([cfg.judgeModel, cfg.judgeApiModel, NUDGE_SYSTEM, nudgeUserPrompt(prompt, cfg.maxPromptChars)]))
+    .digest('hex').slice(0, 32);
+}
+
+export async function askNudge(prompt, cfg, env = process.env, impl = { api: judgeViaApi, cli: judgeViaCli }) {
+  const levels = Object.keys(cfg.routes);
+  return askModel(nudgeUserPrompt(prompt, cfg.maxPromptChars), NUDGE_SYSTEM, (text) => parseNudge(text, levels), cfg, env, impl);
+}
+
+export async function askNudgeCached(prompt, cfg, env = process.env, judge = askNudge, now = Date.now) {
+  return withCache(nudgeCacheKey(prompt, cfg), () => judge(prompt, cfg, env), cfg, env, now);
+}
+
+// Prompts Claude Code itself submits, not the user: a subagent's hand-back (<agent-message from=…>), background
+// task and shell notifications, a local command's output, reminders. Seen in real runs: each finished background
+// subagent's report arrives as a UserPromptSubmit prompt starting with <agent-message.
+const MACHINE_PROMPT = /^<(agent-message|[a-z-]*notification|command-(name|message|args)|local-command-[a-z]+|system-reminder|user-prompt-submit-hook)\b/i;
+
+// Why a prompt is not judged at all (cheap checks, nothing logged), or undefined when it is.
+export function nudgeSkip(hookInput, cfg, env = process.env) {
+  if (env.MODEL_JUDGE_INNER === '1') return 'guard';
+  if (String(cfg.delegationNudge ?? 'off').toLowerCase() !== 'on') return 'off';
+  const prompt = typeof hookInput?.prompt === 'string' ? hookInput.prompt.trim() : '';
+  if (!prompt) return 'empty';
+  if (prompt.startsWith('/')) return 'slash-command';
+  if (MACHINE_PROMPT.test(prompt)) return 'not-from-user';
+  if (prompt.length < (Number(cfg.nudgeMinChars) || 0)) return 'short';
+  return undefined;
+}
+
+const RANK = { easy: 0, medium: 1, hard: 2 };
+
+// Returns { output, log }: output is the hook's stdout object or null (prompt untouched); log is undefined for
+// the cheap skips (off, short, slash command, guard), so a prompt that is never judged leaves no trace.
+export async function decideNudge(hookInput, { env = process.env, cfg = loadConfig(env), judge = askNudgeCached } = {}) {
+  const skip = nudgeSkip(hookInput, cfg, env);
+  if (skip) return { output: null, log: undefined, skip };
+  const prompt = hookInput.prompt.trim();
+  const log = {
+    ts: new Date().toISOString(),
+    kind: 'nudge',
+    session_id: hookInput.session_id,
+    prompt_head: prompt.slice(0, 200),
+    prompt_chars: prompt.length,
+  };
+  const r = await judge(prompt, cfg, env);
+  Object.assign(log, { judge: r.judge ?? null, judge_ms: r.ms, ...(r.cachedFrom ? { cached_from: r.cachedFrom } : {}) });
+  if (r.error) {
+    log.status = 'failed';
+    log.reason = `judge failed: ${r.error}`;
+  } else {
+    const { difficulty, confidence, why, parts = [] } = r.verdict;
+    Object.assign(log, { difficulty, confidence, why, parts });
+    const minRank = RANK[cfg.nudgeMinDifficulty] ?? RANK.medium;
+    const minParts = Math.max(2, Number(cfg.nudgeMinParts) || 2);
+    const minConf = Number(cfg.nudgeMinConfidence) || 0;
+    if ((RANK[difficulty] ?? -1) < minRank) { log.status = 'none'; log.reason = `${difficulty}: below ${cfg.nudgeMinDifficulty}`; }
+    else if (confidence < minConf) { log.status = 'none'; log.reason = `judge unsure: confidence ${confidence} < ${minConf}`; }
+    else if (parts.length < minParts) { log.status = 'none'; log.reason = `${parts.length} independent part(s) < ${minParts}`; }
+    else log.status = 'nudge';
+  }
+  let output = null;
+  if (log.status === 'nudge') {
+    output = { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: nudgeContext(log, cfg, env) } };
+  }
+  const message = formatNudgeMessage(log, cfg);
+  if (message) output = { ...(output ?? {}), systemMessage: message };
+  return { output, log };
+}
+
+// The context the main agent gets: the parts, the model and effort model-judge is likely to give each one's
+// subagent (the PreToolUse judge decides for real at each spawn), and when not to delegate.
+export function nudgeContext(log, cfg = DEFAULT_CONFIG, env = process.env) {
+  const allowed = fieldsAllowed(env);
+  const lines = log.parts.map((p, i) => {
+    const route = cfg.routes[p.difficulty] || {};
+    const model = toModelAlias(route.model);
+    const effort = cfg.setEffort && allowed.effort ? toEffort(route.effort) : undefined;
+    const on = model && allowed.model ? ` → likely ${model}${effort ? ` / ${effort} effort` : ''}` : '';
+    return `${i + 1}. ${p.task} (${p.difficulty}${on})`;
+  });
+  return [
+    `model-judge delegation hint (from the model-judge plugin, not from the user): this task looks ${log.difficulty} ` +
+      `(confidence ${log.confidence}) and splits into ${log.parts.length} parts that can run independently:`,
+    ...lines,
+    'Recommended: hand these parts to subagents with the Agent tool, one subagent per part, all in one message so they run ' +
+      'in parallel. This is the case the Agent tool is meant for: independent work that can run at the same time, ' +
+      'checked by a judge before you start. Each subagent starts with a fresh context, so give it a self-contained prompt with the paths and facts it ' +
+      'needs. model-judge sets each subagent\'s model and effort when it starts (the guesses above), so you need not set them. ' +
+      'Keep in the main agent any part that is only a quick lookup or a small edit, work that is tightly coupled, and putting ' +
+      'the parts\' results together. This is a recommendation, not a requirement: skip it if the split doesn\'t fit what you ' +
+      'know of the task.',
+  ].join('\n');
+}
+
+// The line the user sees: when a nudge is added (display "all" or "changes"), or the judge failed ("all" only).
+export function formatNudgeMessage(log, cfg = DEFAULT_CONFIG) {
+  const mode = cfg.display ?? 'all';
+  if (mode === 'off' || mode === false || !log) return undefined;
+  const secs = log.judge === 'cache' ? ', cached' : typeof log.judge_ms === 'number' ? `, ${(log.judge_ms / 1000).toFixed(1)}s` : '';
+  if (log.status === 'nudge') {
+    return `⚖ model-judge: suggested delegation: ${log.parts.length} parts (${log.difficulty} ${log.confidence.toFixed(2)}${secs})`;
+  }
+  if (log.status === 'failed' && mode === 'all') {
+    return `⚖ model-judge: delegation check failed (${clip(String(log.reason).replace(/^judge failed: /, ''), 80)}) → no hint${secs}`;
+  }
+  return undefined;
 }

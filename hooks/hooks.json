@@ -1,9 +1,20 @@
 {
-  "description": "model-judge: pick each subagent's model and effort before it starts",
+  "description": "model-judge: pick each subagent's model and effort before it starts; optionally suggest delegation",
   "modules": [
     "./register.ts"
   ],
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/nudge.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Agent|Task",

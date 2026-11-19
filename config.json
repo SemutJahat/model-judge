@@ -9,6 +9,11 @@
   "display": "all",
   "apply": "spawn",
   "cacheTtlMs": 600000,
+  "delegationNudge": "off",
+  "nudgeMinChars": 80,
+  "nudgeMinDifficulty": "medium",
+  "nudgeMinConfidence": 0.7,
+  "nudgeMinParts": 2,
   "routes": {
     "easy":   { "model": "haiku",  "effort": "low" },
     "medium": { "model": "sonnet", "effort": "medium" },

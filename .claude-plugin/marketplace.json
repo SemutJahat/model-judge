@@ -11,8 +11,8 @@
     {
       "name": "model-judge",
       "source": "./",
-      "description": "Picks each subagent's model and effort with a small judge model, before it starts.",
-      "version": "0.3.0"
+      "description": "Picks each subagent's model and effort with a small judge model, before it starts; opt-in, suggests delegating big multi-part prompts.",
+      "version": "0.4.0"
     },
     {
       "name": "rag-first",

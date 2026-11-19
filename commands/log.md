@@ -1,5 +1,5 @@
 ---
-description: Show model-judge's last subagent decisions (verdict, confidence, model, effort, judge time)
+description: Show model-judge's last decisions (subagents: verdict, confidence, model, effort, judge time; delegation nudges)
 argument-hint: "[N]"
 allowed-tools: Bash(node:*)
 ---

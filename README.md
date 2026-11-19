@@ -27,7 +27,8 @@ changed subagent call refused in auto mode, and the model then sent each call a 
 at spawn time leaves the reviewed call untouched. See [Auto mode](#auto-mode-why-the-call-is-not-rewritten).
 
 It also adds a `/model-judge:log` command and ships an optional status line. See
-[Seeing what the judge does](#seeing-what-the-judge-does).
+[Seeing what the judge does](#seeing-what-the-judge-does). Opt-in, it can also suggest that the main agent
+delegate a big multi-part prompt to subagents: see [Delegation nudge](#delegation-nudge-opt-in-off-by-default).
 
 Default routes (in `config.json`):
 
@@ -133,6 +134,75 @@ Each routed subagent waits for one judge call before it starts. Measured on this
 3.07 s wall, of which the model took 2.0 s (`duration_ms`). The API path skips the CLI's start-up and should be
 faster, but no API key was available here to time it. A cache hit (the same call within 10 minutes) costs
 nothing: no judge call. The module's hand-off adds two short `node` runs per subagent (about 50 ms each).
+
+## Delegation nudge (opt-in, off by default)
+
+The judge can also look at **your prompt**, before the main agent sees it, and suggest that the main agent hand
+parts of the work to subagents. It is off unless you turn it on:
+
+```sh
+mkdir -p ~/.claude/model-judge
+echo '{"delegationNudge": "on"}' > ~/.claude/model-judge/config.json   # merged over the plugin's config.json
+```
+
+A `UserPromptSubmit` hook (`scripts/nudge.mjs`) sends the prompt to the same judge (`claude -p --model haiku`, or
+the Messages API with `ANTHROPIC_API_KEY`; same recursion guard, same `timeoutMs`, fails open). The judge answers
+with the task's difficulty and the parts of it that could run **independently**: changes to separate files or
+modules, several separate questions, research or a long search that can run on its own. Only when the task is
+at least `medium`, the judge is sure enough, and there are at least 2 such parts does the hook add context for
+the main agent:
+
+```
+model-judge delegation hint (from the model-judge plugin, not from the user): this task looks hard (confidence 0.85) and splits into 3 parts that can run independently:
+1. Trace how a chat message flows from internal/server to the model call in internal/providers (medium → likely sonnet / medium effort)
+2. Review internal/sandbox and list every way a command could reach the host outside the sandbox (hard → likely opus / high effort)
+3. List every configuration key read in internal/config and check whether docs/ documents each (medium → likely sonnet / medium effort)
+Recommended: hand these parts to subagents with the Agent tool, one subagent per part, all in one message so they run in parallel. […]
+Keep in the main agent any part that is only a quick lookup or a small edit, work that is tightly coupled, and putting the parts' results together. This is a recommendation, not a requirement: […]
+```
+
+and shows you one line (it follows `display`: shown for `all` and `changes`, hidden for `off`):
+
+```
+UserPromptSubmit says: ⚖ model-judge: suggested delegation: 3 parts (hard 0.85, 3.5s)
+```
+
+It never blocks the prompt and never forces anything: the main agent decides. The models in the hint are
+guesses from `routes`; the subagent judge still decides each subagent's model and effort for real when it
+starts, as always. Easy, single-step, tightly coupled and conversational prompts get nothing. The judge's
+answer is logged either way (`"kind": "nudge"`, status `nudge`, `none` or `failed`) and shows in
+`/model-judge:log` and `log.mjs` as a `prompt: …` row with `N parts` and result `nudge` / `no-nudge`.
+
+**What is never judged** (no judge call, nothing logged): prompts shorter than `nudgeMinChars` (80; this also
+covers "yes", "go on" and other short follow-ups), slash commands, prompts Claude Code submits itself (a
+background subagent's hand-back `<agent-message …>`, task and shell notifications, local command output), and
+anything inside the judge's own runs. The same prompt within `cacheTtlMs` reuses the cached answer.
+
+**The trade-off.** A subagent starts with a fresh, empty context: it has to rediscover what the main agent
+already knows, and its report then has to be read back. That pays off for big or parallel work (several
+independent investigations across a large codebase run at once, and keep the file dumps out of the main
+context). For small tasks it is pure overhead. Every qualifying prompt also waits for one judge call before the
+main agent starts: **~3–5 s** (measured 3.0–5.5 s, median 4.4 s, over 23 real calls here, `claude -p` judge
+on Haiku 5.5, no API key; the nudge judge writes a longer answer than the subagent judge), about $0.0002 each. With the nudge off, the hook only starts `node`, reads the config and exits (≈50 ms).
+
+What happened in the real runs (Claude Code 2.1.328, `--plugin-dir` the repo, main model Sonnet, nudge on):
+
+| prompt | where | nudge | what the main agent did |
+|---|---|---|---|
+| "What is confidenceThreshold in config.json…" (easy) | this repo, headless default + auto, interactive default + auto | none (easy 0.97), no line | answered itself |
+| three read-only questions about this ~20-file repo | this repo, headless | nudge (medium, 3 parts) | answered all three itself, with Bash/Read (Sonnet and Opus as main) |
+| three independent investigations of a 1,147-file Go repo | headless default + auto, interactive default + auto | nudge (hard 0.85, 3 parts) | started 3 subagents in one message; model-judge set sonnet/medium, opus/high, sonnet/medium at spawn |
+
+The second row is the trade-off at work: the main agent judged a small repo cheaper to read itself and skipped
+the hint, which is what "never forces" allows. The settings that tune it:
+
+| key | default | meaning |
+|---|---|---|
+| `delegationNudge` | `"off"` | `"on"` turns the nudge on |
+| `nudgeMinChars` | `80` | shorter prompts are never judged |
+| `nudgeMinDifficulty` | `"medium"` | the whole task must be at least this hard |
+| `nudgeMinConfidence` | `0.7` | the judge's confidence must reach this |
+| `nudgeMinParts` | `2` | at least this many independent parts (never less than 2) |
 
 ## Seeing what the judge does
 
@@ -388,6 +458,8 @@ the next subagent call, and `hooks/` and `commands/` from the next new session.
   "display": "all",                      // the line under each subagent call: "all" | "changes" | "off"
   "apply": "spawn",                      // "spawn": set at agent.spawn/turn.step (works in auto mode); "input": 0.1's updatedInput
   "cacheTtlMs": 600000,                  // reuse a verdict for the same call for 10 min; 0 turns the cache off
+  "delegationNudge": "off",              // "on": suggest delegation for big multi-part prompts (see Delegation nudge)
+  "nudgeMinChars": 80, "nudgeMinDifficulty": "medium", "nudgeMinConfidence": 0.7, "nudgeMinParts": 2,
   "routes": { "easy": {...}, "medium": {...}, "hard": {...} }
 }
 ```
@@ -421,6 +493,10 @@ Every decision is one JSON line in **`~/.claude/model-judge/decisions.jsonl`** (
 unchanged line has a `reason`. `prompt_head` is the prompt's first 200 characters. `judge` is `cli`, `api` or
 `cache`. `apply` is `spawn` or `input`.
 
+A delegation nudge (when it is on) is a line with `"kind": "nudge"`: `status` `nudge`, `none` or `failed`,
+`prompt_head`, `prompt_chars`, `difficulty`, `confidence`, `why`, `parts` (`[{task, difficulty}]`), `judge`,
+`judge_ms`, and a `reason` when no nudge was added. The status line ignores these lines.
+
 The hooks module adds two lines per routed subagent, with an `event` field (the views skip them):
 
 ```json
@@ -439,7 +515,7 @@ tail -f ~/.claude/model-judge/decisions.jsonl | jq -c '{description, difficulty,
 ## Tests
 
 ```sh
-npm test            # node --test test/: 49 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
+npm test            # node --test test/: 70 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
 ./test/real-run.sh  # the real check below, costs a few cents (same machinery as examples/demo.sh)
 ```
 
@@ -448,7 +524,11 @@ The unit tests cover: easy, medium and hard prompts; a model and effort already 
 answering garbage, unsure or too slow; forks and other tools; `CLAUDE_CODE_EFFORT_LEVEL` and
 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`; config overrides; the API path and its fallback to `claude -p`; the line
 shown to the user in each case and each `display` mode; the status line text; the `log.mjs` table, its
-`--session` and `--json` options and an empty log.
+`--session` and `--json` options and an empty log. `test/nudge.test.mjs` covers the delegation nudge: off by
+default, on through the personal config, a multi-part prompt (context, line, log), easy / coupled / unsure
+prompts, the cheap skips (short, slash command, subagent hand-back, recursion guard), `nudgeMinChars`, the
+cache, the judge failing, too slow or missing, `display`, the thresholds, the hint's models and effort, and
+the `log.mjs` rows.
 
 ### Real run (evidence)
 
