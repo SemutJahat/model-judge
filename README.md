@@ -242,7 +242,7 @@ model-judge (its `installPath` in `~/.claude/plugins/installed_plugins.json`) an
 
 ```sh
 mkdir -p ~/.claude/model-judge
-cp "$(jq -r '.plugins["model-judge@claude-judge"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/statusline-launcher.mjs" \
+cp "$(jq -r '.plugins["model-judge@semutjahat"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/statusline-launcher.mjs" \
    ~/.claude/model-judge/statusline.mjs
 ```
 
@@ -332,13 +332,13 @@ for the subagent (matched by `agent_id`) shows the effort its first request carr
 
 ## Install / uninstall
 
-The repo is its own marketplace, named `claude-judge`. To install model-judge for your user (all your Claude
+The repo is its own marketplace, named `semutjahat`. To install model-judge for your user (all your Claude
 Code sessions), from a terminal:
 
 ```sh
 claude plugin marketplace add SemutJahat/claude-judge
-claude plugin install model-judge@claude-judge --scope user
-claude plugin list                     # model-judge@claude-judge … Scope: user · Status: ✔ enabled
+claude plugin install model-judge@semutjahat --scope user
+claude plugin list                     # model-judge@semutjahat … Scope: user · Status: ✔ enabled
 ```
 
 Or at the Claude Code prompt: `/plugin install model-judge --marketplace SemutJahat/claude-judge`.
@@ -346,20 +346,20 @@ New sessions load the plugin; sessions that are already open don't. It needs Cla
 (2.1.328 has them; see [Older Claude Code](#auto-mode-why-the-call-is-not-rewritten)), Node on the PATH, and
 your Claude Code login, which the judge uses.
 
-Claude Code installs a copy of the plugin in `~/.claude/plugins/cache/claude-judge/model-judge/<version>/`
+Claude Code installs a copy of the plugin in `~/.claude/plugins/cache/semutjahat/model-judge/<version>/`
 and runs it from there. To get a newer version after the repo changes:
 
 ```sh
-claude plugin marketplace update claude-judge     # fetch the repo's latest marketplace and plugin
-claude plugin update model-judge@claude-judge    # then open a new session
+claude plugin marketplace update semutjahat     # fetch the repo's latest marketplace and plugin
+claude plugin update model-judge@semutjahat    # then open a new session
 ```
 
 To turn it off for a while, or remove it:
 
 ```sh
-claude plugin disable model-judge@claude-judge --scope user    # off; on again: claude plugin enable model-judge@claude-judge --scope user
-claude plugin uninstall model-judge@claude-judge --scope user  # remove the plugin
-claude plugin marketplace remove claude-judge                   # remove the marketplace
+claude plugin disable model-judge@semutjahat --scope user    # off; on again: claude plugin enable model-judge@semutjahat --scope user
+claude plugin uninstall model-judge@semutjahat --scope user  # remove the plugin
+claude plugin marketplace remove semutjahat                   # remove the marketplace
 ```
 
 To try it for one session without installing anything, from a clone: `claude --plugin-dir .`

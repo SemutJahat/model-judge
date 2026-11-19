@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-- Renamed from `judge-router` to `model-judge`: plugin `model-judge@claude-judge`, command `/model-judge:log`,
+- Renamed from `judge-router` to `model-judge`: plugin `model-judge@semutjahat`, command `/model-judge:log`,
   data folder `~/.claude/model-judge/`, environment variables `MODEL_JUDGE_*` (the old names are no longer
   read). To keep an old log, move `~/.claude/judge-router/` to `~/.claude/model-judge/`.
 

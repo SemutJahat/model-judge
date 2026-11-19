@@ -16,7 +16,7 @@ export function findRoot(env = process.env) {
     const j = JSON.parse(readFileSync(join(configDir, 'plugins', 'installed_plugins.json'), 'utf8'));
     const keys = Object.keys(j.plugins || {}).filter((k) => k.startsWith('model-judge@'));
     // Prefer the GitHub marketplace's install, then any other; within one, the user-scope entry.
-    keys.sort((a, b) => (b === 'model-judge@claude-judge') - (a === 'model-judge@claude-judge'));
+    keys.sort((a, b) => (b === 'model-judge@semutjahat') - (a === 'model-judge@semutjahat'));
     for (const k of keys) {
       const entries = j.plugins[k] || [];
       const e = entries.find((x) => x.scope === 'user') || entries[0];

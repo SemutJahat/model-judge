@@ -80,14 +80,14 @@ test('log.mjs: a spawn-mode decision is "override" once the module logged it app
   assert.equal(statusText(lastDecision(join(d, 'decisions.jsonl'), 'S')), '⚖ haiku/low · easy 0.90 · "pending one"');
 });
 
-test('statusline-launcher: finds the installed copy from installed_plugins.json, prefers claude-judge, runs it', async () => {
+test('statusline-launcher: finds the installed copy from installed_plugins.json, prefers semutjahat, runs it', async () => {
   const { findRoot } = await import('../scripts/statusline-launcher.mjs');
   const cfgDir = mkdtempSync(join(tmpdir(), 'jr-cfg-'));
   mkdirSync(join(cfgDir, 'plugins'), { recursive: true });
   const root = join(HERE, '..');
   writeFileSync(join(cfgDir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
     'model-judge@other': [{ scope: 'user', installPath: '/nonexistent' }],
-    'model-judge@claude-judge': [{ scope: 'project', installPath: '/nope' }, { scope: 'user', installPath: root }],
+    'model-judge@semutjahat': [{ scope: 'project', installPath: '/nope' }, { scope: 'user', installPath: root }],
   } }));
   assert.equal(findRoot({ CLAUDE_CONFIG_DIR: cfgDir }), root);
   assert.equal(findRoot({ CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'jr-none-')) }), undefined);
