@@ -1,0 +1,17 @@
+{
+  "description": "judge-router: pick each subagent's model and effort before it starts",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/route.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

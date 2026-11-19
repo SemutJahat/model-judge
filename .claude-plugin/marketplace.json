@@ -1,0 +1,15 @@
+{
+  "name": "judge-router-local",
+  "owner": { "name": "local" },
+  "metadata": {
+    "description": "Local marketplace holding the judge-router plugin."
+  },
+  "plugins": [
+    {
+      "name": "judge-router",
+      "source": "./",
+      "description": "Picks each subagent's model and effort with a small judge model, before it starts.",
+      "version": "0.1.0"
+    }
+  ]
+}

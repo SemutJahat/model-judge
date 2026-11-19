@@ -1,0 +1,14 @@
+{
+  "judgeModel": "haiku",
+  "judgeApiModel": "claude-haiku-5-5",
+  "useApiKey": true,
+  "confidenceThreshold": 0.75,
+  "timeoutMs": 15000,
+  "maxPromptChars": 6000,
+  "setEffort": true,
+  "routes": {
+    "easy":   { "model": "haiku",  "effort": "low" },
+    "medium": { "model": "sonnet", "effort": "medium" },
+    "hard":   { "model": "opus",   "effort": "high" }
+  }
+}

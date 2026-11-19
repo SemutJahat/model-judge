@@ -1,0 +1,20 @@
+{
+  "name": "judge-router",
+  "version": "0.1.0",
+  "description": "Before every subagent starts, a small judge model rates its prompt easy / medium / hard and sets the subagent's model and effort to match, overriding whatever was set.",
+  "author": {
+    "name": "judge-router"
+  },
+  "license": "MIT",
+  "keywords": [
+    "subagent",
+    "model",
+    "routing",
+    "hooks"
+  ],
+  "network": {
+    "hosts": [
+      "api.anthropic.com"
+    ]
+  }
+}

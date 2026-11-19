@@ -1,0 +1,12 @@
+{
+  "session_id": "sess-1",
+  "tool_use_id": "toolu_fixture",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "hard but haiku requested",
+    "prompt": "HARD: rewrite the scheduler to be lock-free.",
+    "subagent_type": "general-purpose",
+    "model": "haiku"
+  }
+}

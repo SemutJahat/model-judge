@@ -1,0 +1,13 @@
+{
+  "session_id": "sess-1",
+  "tool_use_id": "toolu_fixture",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "trivial but opus requested",
+    "prompt": "Find where MAX_RETRIES is defined.",
+    "subagent_type": "general-purpose",
+    "model": "opus",
+    "effort": "max"
+  }
+}
