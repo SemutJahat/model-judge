@@ -133,7 +133,7 @@ test('judge called as claude -p with no tools/MCP/settings, in an empty temp dir
   assert.equal(a[a.indexOf('--setting-sources') + 1], '');
   assert.ok(a.includes('--no-session-persistence'));
   assert.equal(call.inner, '1');
-  assert.match(call.cwd, /judge-router-/);
+  assert.match(call.cwd, /task-/);
   assert.ok(!existsSync(call.cwd), 'temp dir removed afterwards');
   assert.match(call.prompt, /Description: find a constant/);
 });

@@ -70,6 +70,68 @@ Each routed subagent waits for one judge call before it starts. Measured on this
 3.07 s wall, of which the model took 2.0 s (`duration_ms`). The API path skips the CLI's start-up and should be
 faster, but no API key was available here to time it.
 
+## Try it yourself
+
+None of these install anything. They use the plugin straight from this folder.
+
+**1. One-command demo** (about 30–60 s, a few cents):
+
+```sh
+./examples/demo.sh                              # examples/prompts/mixed.md: easy + medium + hard, all requesting sonnet
+./examples/demo.sh examples/prompts/ambiguous.md   # or any other prompt file
+```
+
+It runs a headless session in a throwaway temp folder and prints one row per subagent: the model requested, the
+judge's verdict, what the hook set, and what the subagent started with and ran on. The real run is shown under
+[Real run](#real-run-evidence).
+
+**2. Prompts to paste into an interactive session.** Start Claude Code with the plugin loaded for that session:
+
+```sh
+claude --plugin-dir ~/Script/claude-judge-router
+```
+
+Then paste a file from `examples/prompts/`. Each one asks for subagents with `model: "sonnet"` and gives each
+subagent's prompt in a ```` ```task ```` block:
+
+| file | what to expect |
+|---|---|
+| `easy.md` | count words: easy → **haiku**, effort low |
+| `medium.md` | slugify function with edge cases and tests: medium → **sonnet**, effort medium |
+| `hard.md` | distributed rate limiter design: hard → **opus**, effort high |
+| `mixed.md` | all three in one go |
+| `ambiguous.md` | "Look into it and do what's needed.": the judge is unsure (confidence ≈ 0.3–0.45 < 0.75), so the call is **left unchanged** (sonnet, no effort) |
+
+**3. Just the judge, no subagent** (about 3 s per prompt):
+
+```sh
+node examples/dry-run.mjs "Count the words in: the quick brown fox"
+echo "Design a sharded job queue with exactly-once delivery" | node examples/dry-run.mjs --model sonnet
+node examples/dry-run.mjs --model sonnet --file examples/prompts/mixed.md   # judges each task block
+node examples/dry-run.mjs --json --file examples/prompts/hard.md            # the log line it would write
+```
+
+It runs the same `decide()` as the hook, with the same config, judge and threshold. It prints the verdict and the
+model and effort it would set, and writes nothing to the log unless you pass `--log`.
+
+**Reading the log.** Every subagent the hook sees in a normal session adds a line to
+`~/.claude/judge-router/decisions.jsonl` (the demo writes to its temp folder instead):
+
+```sh
+jq -c '{ts, description, difficulty, confidence, model: "\(.model_before) -> \(.model_after)", effort_after, action, reason}' ~/.claude/judge-router/decisions.jsonl | tail
+```
+
+**Seeing the real model in a subagent's transcript.** Claude Code keeps each subagent's transcript next to the
+session's, in `~/.claude/projects/<project folder>/<session id>/subagents/`:
+
+```sh
+S=$(echo ~/.claude/projects/*/SESSION_ID/subagents)   # SESSION_ID: from the log line's session_id
+cat $S/agent-*.meta.json                    # {"description":…, "model":"haiku", "effort":"low", "toolUseId":…}
+jq -r 'select(.type=="assistant") | .message.model' $S/agent-*.jsonl | sort | uniq -c   # e.g. claude-haiku-5-5
+```
+
+`toolUseId` in `meta.json` is the `tool_use_id` of the log line, so the two can be matched.
+
 ## Install / uninstall
 
 Nothing is installed by this repository. To install it for your user, from a terminal:
@@ -147,7 +209,7 @@ tail -f ~/.claude/judge-router/decisions.jsonl | jq -c '{description, difficulty
 
 ```sh
 npm test            # node --test test/: 28 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
-./test/real-run.sh  # the real check below, costs a few cents
+./test/real-run.sh  # the real check below, costs a few cents (same machinery as examples/demo.sh)
 ```
 
 The unit tests cover: easy, medium and hard prompts; a model and effort already set and then overridden;
@@ -157,26 +219,23 @@ answering garbage, unsure or too slow; forks and other tools; `CLAUDE_CODE_EFFOR
 
 ### Real run (evidence)
 
-`test/real-run.sh` runs a headless `claude -p --plugin-dir <this folder> --setting-sources "" --strict-mcp-config
---model sonnet` in a temp folder. Nothing is installed and no settings files are read. The main agent is told
-to start two subagents and to set `model: "sonnet"` on both. Output of the run on 2026-11-19:
+`examples/demo.sh` and `test/real-run.sh` run a headless `claude -p --plugin-dir <this folder> --setting-sources ""
+--strict-mcp-config --model sonnet` session in a temp folder (`test/headless-run.sh`). Nothing is installed and
+no settings files are read. Afterwards `test/run-report.mjs` matches each subagent's tool call, log line and
+transcript by `tool_use_id`. The demo run of 2026-11-19 (three subagents in one go, all requesting `sonnet`):
 
 ```
-== what the main agent asked for (its Agent tool calls)
-{"description":"trivial echo","model":"sonnet","effort":null}
-{"description":"hard design","model":"sonnet","effort":null}
-== judge-router decisions
-{"description":"trivial echo","difficulty":"easy","confidence":0.98,"judge_ms":3055,"model":"sonnet -> haiku","effort":"null -> low",...}
-{"description":"hard design","difficulty":"hard","confidence":0.95,"judge_ms":2884,"model":"sonnet -> opus","effort":"null -> high",...}
-== session 02a6f620-…: each subagent's metadata and the model on its API responses (~/.claude/projects/…/subagents)
-{"description":"hard design","requested_model":"opus","requested_effort":"high","ran_on":"claude-opus-5-5"}
-{"description":"trivial echo","requested_model":"haiku","requested_effort":"low","ran_on":"claude-haiku-5-5"}
-== models billed in the session (result.modelUsage)
-{"claude-sonnet-5-5":{"outputTokens":470,...},"claude-haiku-5-5":{"outputTokens":4,...},"claude-opus-5-5":{"outputTokens":1385,...}}
+| Subagent                 | Requested | Judge verdict | Hook set        | Started with (meta) | Ran on (transcript) |
+|--------------------------|-----------|---------------|-----------------|---------------------|---------------------|
+| count words              | sonnet    | easy 0.97     | haiku / low     | haiku / low         | claude-haiku-5-5    |
+| slugify with tests       | sonnet    | medium 0.9    | sonnet / medium | sonnet / medium     | claude-sonnet-5-5   |
+| distributed rate limiter | sonnet    | hard 0.8      | opus / high     | opus / high         | claude-opus-5-5     |
+
+models billed in the session: claude-sonnet-5-5 (2311 output tokens, $0.1006), claude-haiku-5-5 (49 output tokens, $0.0005), claude-opus-5-5 (1251 output tokens, $0.0420)
 ```
 
-The main agent asked for Sonnet both times. The "pong" subagent ran on **Claude Haiku 5.5** at effort **low**,
-and the design subagent on **Claude Opus 5.5** at effort **high**. `requested_*` come from each subagent's
-`agent-*.meta.json` and `ran_on` from the `message.model` of its responses in `agent-*.jsonl`. The main
-transcript still shows the call as the model wrote it (`model: "sonnet"`), because the hook's change applies
-when the tool runs. The hook set no permission decision, and both subagents started normally.
+"Started with" comes from each subagent's `agent-*.meta.json` and "Ran on" from the `message.model` of its
+responses in `agent-*.jsonl`. The earlier two-subagent `test/real-run.sh` run gave the same result: the echo
+subagent ran on `claude-haiku-5-5` at effort low, and the design subagent on `claude-opus-5-5` at effort high.
+The main transcript still shows each call as the model wrote it (`model: "sonnet"`), because the hook's change
+applies when the tool runs. The hook set no permission decision, and every subagent started normally.

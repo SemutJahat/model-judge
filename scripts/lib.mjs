@@ -62,9 +62,10 @@ export function toEffort(e) {
 }
 
 export const JUDGE_SYSTEM = `You rate how hard a task given to a coding subagent is, to pick the model that runs it.
-easy: mechanical, bounded, checkable work (a lookup, a grep-and-report, a small obvious edit, a summary of given text).
-medium: ordinary engineering work needing some reasoning (a feature or fix across a few files, a focused review, a moderate investigation).
-hard: open-ended or deep work (architecture, subtle concurrency or security, hard debugging, broad refactors, research needing judgment).
+easy: mechanical work that needs almost no reasoning (count or look something up, grep-and-report, a rename or one-line edit, repeat or summarize given text).
+medium: ordinary engineering that needs real but bounded reasoning (write a new function or module with its edge cases and tests, a fix or feature across a few files, a focused review, a moderate investigation). Writing new code that must handle edge cases and come with tests is medium, even when it is a single small function.
+hard: open-ended or deep work (system or architecture design and its trade-offs, distributed systems, subtle concurrency or security, hard debugging, broad refactors, research needing judgment).
+confidence: how sure you are of the difficulty. If the task is too vague or lacks the context to tell what work it means (e.g. "fix it", "look into it"), the difficulty is a guess: give a confidence below 0.5.
 Reply with ONLY a JSON object, no prose, no code fence:
 {"difficulty":"easy"|"medium"|"hard","confidence":<0..1>,"why":"<one short sentence>"}`;
 
@@ -121,10 +122,10 @@ async function judgeViaApi(userPrompt, cfg, env, timeoutMs) {
 }
 
 // `claude -p` on the user's own login: no tools, no MCP, no settings (so no plugins, so not this hook),
-// no session saved, in an empty temp folder, with JUDGE_ROUTER_INNER=1 as a second guard against recursion.
+// no session saved, in an empty temp folder (a neutral name: the model sees its working folder), with JUDGE_ROUTER_INNER=1 as a second guard against recursion.
 export function judgeViaCli(userPrompt, cfg, env, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const cwd = mkdtempSync(join(tmpdir(), 'judge-router-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'task-'));
     const args = [
       '-p', '--model', cfg.judgeModel,
       '--tools', '', '--strict-mcp-config', '--setting-sources', '',
