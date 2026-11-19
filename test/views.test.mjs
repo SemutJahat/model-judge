@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,4 +78,25 @@ test('log.mjs: a spawn-mode decision is "override" once the module logged it app
   assert.match(rows[3], /pending one .* pending$/);
   assert.match(rows[4], /^\(2 of 2,/);
   assert.equal(statusText(lastDecision(join(d, 'decisions.jsonl'), 'S')), '⚖ haiku/low · easy 0.90 · "pending one"');
+});
+
+test('statusline-launcher: finds the installed copy from installed_plugins.json, prefers claude-judge, runs it', async () => {
+  const { findRoot } = await import('../scripts/statusline-launcher.mjs');
+  const cfgDir = mkdtempSync(join(tmpdir(), 'jr-cfg-'));
+  mkdirSync(join(cfgDir, 'plugins'), { recursive: true });
+  const root = join(HERE, '..');
+  writeFileSync(join(cfgDir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
+    'judge-router@other': [{ scope: 'user', installPath: '/nonexistent' }],
+    'judge-router@claude-judge': [{ scope: 'project', installPath: '/nope' }, { scope: 'user', installPath: root }],
+  } }));
+  assert.equal(findRoot({ CLAUDE_CONFIG_DIR: cfgDir }), root);
+  assert.equal(findRoot({ CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'jr-none-')) }), undefined);
+  assert.equal(findRoot({ JUDGE_ROUTER_ROOT: '/x' }), '/x');
+  const r = spawnSync(process.execPath, [join(SCRIPTS, 'statusline-launcher.mjs')],
+    { env: { ...env, CLAUDE_CONFIG_DIR: cfgDir }, input: '{"session_id":"S2"}', encoding: 'utf8' });
+  assert.equal(r.stdout, '⚖ opus/high · hard 0.85 · "rate limiter design"');
+  const none = spawnSync(process.execPath, [join(SCRIPTS, 'statusline-launcher.mjs')],
+    { env: { ...env, CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'jr-none-')) }, input: '{}', encoding: 'utf8' });
+  assert.equal(none.status, 0);
+  assert.equal(none.stdout, '');
 });

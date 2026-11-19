@@ -215,12 +215,12 @@ Captured from the interactive session:
 (The test session logged to a temp folder, so its path is shortened here.)
 
 The command's output reaches the model, which then repeats it to you. That costs one short model turn.
-In a terminal, with no model involved:
+In a terminal, with no model involved (from a clone of this repo, or the installed copy's folder):
 
 ```sh
-node ~/Script/claude-judge-router/scripts/log.mjs            # last 10 (or: log.mjs 25, -n 25)
-node ~/Script/claude-judge-router/scripts/log.mjs --watch    # then follow new decisions live, in another terminal
-node ~/Script/claude-judge-router/scripts/log.mjs --session SESSION_ID --json
+node scripts/log.mjs            # last 10 (or: log.mjs 25, -n 25)
+node scripts/log.mjs --watch    # then follow new decisions live, in another terminal
+node scripts/log.mjs --session SESSION_ID --json
 ```
 
 ### 3. Status line (opt-in)
@@ -235,23 +235,35 @@ the session's first subagent. Captured at the bottom of the interactive session 
 ```
 
 The other forms: `⚖ sonnet (unsure 0.40) · "vague task"`, `⚖ default (judge failed)`. Nothing sets this up
-for you. To opt in, add this line to your `~/.claude/settings.json`:
+for you. A status line is a command in `~/.claude/settings.json`, and an installed plugin's folder changes with
+each version, so point it at the stable launcher instead. `scripts/statusline-launcher.mjs` finds the installed
+judge-router (its `installPath` in `~/.claude/plugins/installed_plugins.json`) and runs that version's
+`statusline.mjs`. To opt in, copy the launcher out of the plugin once:
+
+```sh
+mkdir -p ~/.claude/judge-router
+cp "$(jq -r '.plugins["judge-router@claude-judge"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/statusline-launcher.mjs" \
+   ~/.claude/judge-router/statusline.mjs
+```
+
+Then add this to `~/.claude/settings.json`, with your home folder in the path:
 
 ```json
-"statusLine": { "type": "command", "command": "node ~/Script/claude-judge-router/scripts/statusline.mjs" }
+"statusLine": { "type": "command", "command": "node /Users/YOU/.claude/judge-router/statusline.mjs" }
 ```
 
 To try it for one session without editing any settings file:
-`claude --plugin-dir ~/Script/claude-judge-router --settings '{"statusLine":{"type":"command","command":"node ~/Script/claude-judge-router/scripts/statusline.mjs"}}'`.
+`claude --settings '{"statusLine":{"type":"command","command":"node /Users/YOU/.claude/judge-router/statusline.mjs"}}'`.
 If you already have a status line, call both from one command, and pass the same stdin to each:
 `sh -c 'i=$(cat); printf %s "$i" | your-statusline; printf " "; printf %s "$i" | node …/statusline.mjs'`.
 
-To remove it, delete the `"statusLine"` entry from `~/.claude/settings.json` (or restore the backup you made
-before adding it). New sessions then show no status line.
+To remove it, delete the `"statusLine"` entry from `~/.claude/settings.json` (and, if you like,
+`~/.claude/judge-router/statusline.mjs`). New sessions then show no status line.
 
 ## Try it yourself
 
-None of these install anything. They use the plugin straight from this folder.
+None of these install anything. They use the plugin straight from a clone of this repo
+(`git clone https://github.com/SemutJahat/claude-judge && cd claude-judge`).
 
 **1. One-command demo** (about 30–60 s, a few cents):
 
@@ -267,7 +279,7 @@ judge's verdict, what the hook set, and what the subagent started with and ran o
 **2. Prompts to paste into an interactive session.** Start Claude Code with the plugin loaded for that session:
 
 ```sh
-claude --plugin-dir ~/Script/claude-judge-router
+claude --plugin-dir .          # from the clone
 ```
 
 Then paste a file from `examples/prompts/`. Each one asks for subagents with `model: "sonnet"` and gives each
@@ -320,45 +332,41 @@ for the subagent (matched by `agent_id`) shows the effort its first request carr
 
 ## Install / uninstall
 
-To install it for your user (all your Claude Code sessions), from a terminal:
+The repo is its own marketplace, named `claude-judge`. To install judge-router for your user (all your Claude
+Code sessions), from a terminal:
 
 ```sh
-claude plugin marketplace add ~/Script/claude-judge-router   # adds the local marketplace "judge-router-local"
-claude plugin install judge-router@judge-router-local --scope user
-claude plugin list                                                    # judge-router@judge-router-local … Status: ✔ enabled
+claude plugin marketplace add SemutJahat/claude-judge
+claude plugin install judge-router@claude-judge --scope user
+claude plugin list                     # judge-router@claude-judge … Scope: user · Status: ✔ enabled
 ```
 
-This adds `"judge-router@judge-router-local": true` under `enabledPlugins` and a `judge-router-local` entry
-under `extraKnownMarketplaces` (a directory source pointing at this folder) to `~/.claude/settings.json`. It
-also records the plugin in `~/.claude/plugins/installed_plugins.json` and `known_marketplaces.json`. New
-sessions load the hook; sessions that are already open don't.
+Or at the Claude Code prompt: `/plugin install judge-router --marketplace SemutJahat/claude-judge`.
+New sessions load the plugin; sessions that are already open don't. It needs Claude Code with hook modules
+(2.1.328 has them; see [Older Claude Code](#auto-mode-why-the-call-is-not-rewritten)), Node on the PATH, and
+your Claude Code login, which the judge uses.
 
-**It runs from this folder, not from a copy.** For a directory marketplace, Claude Code 2.1.328 reads the plugin
-from this folder: `claude plugin list` shows `Read from: ~/Script/claude-judge-router`. In a real
-installed session, the debug log (`--debug=hooks`) showed
-`PreToolUse:Agent [node "~/Script/claude-judge-router/scripts/route.mjs"] (plugin judge-router@judge-router-local)`.
-So what is in this folder applies without reinstalling, including uncommitted edits:
-- changes to `scripts/` and `config.json` apply from the next subagent call;
-- changes to `hooks/hooks.json` and `commands/` apply from the next new session.
+Claude Code installs a copy of the plugin in `~/.claude/plugins/cache/claude-judge/judge-router/<version>/`
+and runs it from there. To get a newer version after the repo changes:
 
-The install also copies the folder to `~/.claude/plugins/cache/judge-router-local/judge-router/0.1.0/` (the
-`installPath` in `installed_plugins.json`), but the hook didn't run from that copy. If you move this folder,
-run `claude plugin marketplace update judge-router-local` or reinstall. What happens if the folder is missing
-is {{Unverified}}.
+```sh
+claude plugin marketplace update claude-judge     # fetch the repo's latest marketplace and plugin
+claude plugin update judge-router@claude-judge    # then open a new session
+```
 
 To turn it off for a while, or remove it:
 
 ```sh
-claude plugin disable judge-router@judge-router-local --scope user    # off; enable again with: claude plugin enable judge-router@judge-router-local --scope user
-claude plugin uninstall judge-router@judge-router-local --scope user  # remove the plugin
-claude plugin marketplace remove judge-router-local                   # remove the local marketplace entry
+claude plugin disable judge-router@claude-judge --scope user    # off; on again: claude plugin enable judge-router@claude-judge --scope user
+claude plugin uninstall judge-router@claude-judge --scope user  # remove the plugin
+claude plugin marketplace remove claude-judge                   # remove the marketplace
 ```
 
-To try it for one session without installing anything:
+To try it for one session without installing anything, from a clone: `claude --plugin-dir .`
 
-```sh
-claude --plugin-dir ~/Script/claude-judge-router
-```
+**Developing it.** A clone added as a local marketplace (`claude plugin marketplace add ./claude-judge`) is read
+straight from that folder, not from a copy. Edits apply without reinstalling: `scripts/` and `config.json` from
+the next subagent call, and `hooks/` and `commands/` from the next new session.
 
 ## Config
 
@@ -380,6 +388,8 @@ claude --plugin-dir ~/Script/claude-judge-router
 }
 ```
 
+An installed plugin is a copy that each update replaces, so put your own settings in
+`~/.claude/judge-router/config.json`, which only needs the keys you change (e.g. `{"display": "changes"}`).
 Settings are read from the plugin's `config.json`, then `~/.claude/judge-router/config.json`, then the file
 in `$JUDGE_ROUTER_CONFIG`. Later files win, key by key, and `routes` merge by level. Route models can be
 aliases (`haiku`, `sonnet`, `opus`, `fable`) or full ids (`claude-opus-5-5` → `opus`). `JUDGE_ROUTER_CLAUDE_BIN`
@@ -438,7 +448,7 @@ shown to the user in each case and each `display` mode; the status line text; th
 
 ### Real run (evidence)
 
-`examples/demo.sh` and `test/real-run.sh` run a headless `claude -p --plugin-dir <this folder> --setting-sources ""
+`examples/demo.sh` and `test/real-run.sh` run a headless `claude -p --plugin-dir <the clone> --setting-sources ""
 --strict-mcp-config --model sonnet` session in a temp folder (`test/headless-run.sh`; set `PERMISSION_MODE` to
 pick the mode). Nothing is installed and no settings files are read. Afterwards `test/run-report.mjs` matches
 each Agent call's tool call, result, log lines and transcript by `tool_use_id`. Here is the auto-mode run of

@@ -1,2 +1,12 @@
 node_modules/
 .DS_Store
+# never publish: local archives, logs and run captures
+*.zip
+*.log
+decisions.jsonl
+!test/fixtures/decisions.jsonl
+cache.json
+pending/
+backups/
+# written by Claude Code beside a hot-reloaded hooks module
+.claude-plugin/types/

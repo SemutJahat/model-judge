@@ -1,8 +1,11 @@
 {
-  "name": "judge-router-local",
-  "owner": { "name": "local" },
+  "name": "claude-judge",
+  "owner": {
+    "name": "SemutJahat",
+    "url": "https://github.com/SemutJahat"
+  },
   "metadata": {
-    "description": "Local marketplace holding the judge-router plugin."
+    "description": "judge-router: a small judge model picks each Claude Code subagent's model and effort."
   },
   "plugins": [
     {
