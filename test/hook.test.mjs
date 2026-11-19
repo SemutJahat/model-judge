@@ -39,7 +39,7 @@ function runHookAsync(stdin, env) {
       let stdout = '', stderr = '';
       c.stdout.on('data', (d) => { stdout += d; });
       c.stderr.on('data', (d) => { stderr += d; });
-      c.on('close', (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0 }));
+      c.on('close', (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0, dir: env.JUDGE_ROUTER_DIR }));
       c.stdin.end(stdin);
     });
   });
@@ -48,7 +48,7 @@ function runHookAsync(stdin, env) {
 function runHook(stdin, env) {
   const t0 = Date.now();
   const r = spawnSync(process.execPath, [ROUTE], { input: stdin, env, encoding: 'utf8', timeout: 30000 });
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0 };
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0, dir: env.JUDGE_ROUTER_DIR };
 }
 
 function lastLog(dir) {
@@ -66,21 +66,32 @@ function messageOnly(stdout, re) {
   return o.systemMessage;
 }
 
-function updated(stdout) {
-  const o = JSON.parse(stdout);
-  assert.equal(o.hookSpecificOutput.hookEventName, 'PreToolUse');
-  assert.equal(o.hookSpecificOutput.permissionDecision, undefined, 'permission decision must stay neutral');
+// apply "spawn" (default): the tool call is left exactly as written (no hookSpecificOutput, so no updatedInput
+// and no permission decision: auto mode's review of the call stays valid); the decision is handed off to the
+// hooks module in pending/<tool_use_id>.json.
+function updated(r, toolUseId = 'toolu_fixture') {
+  assert.equal(r.status, 0);
+  const o = r.stdout ? JSON.parse(r.stdout) : {};
+  assert.equal(o.hookSpecificOutput, undefined, 'the tool call must not be rewritten');
   assert.equal(o.decision, undefined);
-  return o.hookSpecificOutput.updatedInput;
+  const f = join(r.dir, 'pending', `${toolUseId}.json`);
+  assert.ok(existsSync(f), 'decision handed off');
+  return JSON.parse(readFileSync(f, 'utf8'));
+}
+
+function noHandoff(r, toolUseId = 'toolu_fixture') {
+  assert.ok(!existsSync(join(r.dir, 'pending', `${toolUseId}.json`)), 'no decision handed off');
 }
 
 test('easy prompt -> haiku + low effort, rest of the input kept', () => {
   const { dir, env } = baseEnv();
   const r = runHook(fixture('easy'), env);
   assert.equal(r.status, 0);
-  const u = updated(r.stdout);
-  const orig = JSON.parse(fixture('easy')).tool_input;
-  assert.deepEqual(u, { ...orig, model: 'haiku', effort: 'low' });
+  const u = updated(r);
+  assert.equal(u.model, 'haiku');
+  assert.equal(u.effort, 'low');
+  assert.equal(u.difficulty, 'easy');
+  assert.equal(JSON.parse(r.stdout).systemMessage.startsWith('⚖ judge-router: "find a constant" → easy'), true);
   const log = lastLog(dir);
   assert.equal(log.action, 'override');
   assert.equal(log.model_before, null);
@@ -97,36 +108,36 @@ test('override shows the user one line: verdict, model before -> after, effort, 
   const { env } = baseEnv();
   const o = JSON.parse(runHook(fixture('model-set-opus'), env).stdout);
   assert.match(o.systemMessage, /^⚖ judge-router: "trivial but opus requested" → easy 0\.97 · opus→haiku · effort low \(\d+\.\ds\)$/);
-  assert.equal(o.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(o.hookSpecificOutput, undefined);
 });
 
 test('display "off": no message, routing unchanged', () => {
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ display: 'off' }));
-  const o = JSON.parse(runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout);
-  assert.equal(o.systemMessage, undefined);
-  assert.equal(o.hookSpecificOutput.updatedInput.model, 'haiku');
+  const r = runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
+  assert.equal(r.stdout, '');
+  assert.equal(updated(r).model, 'haiku');
   assert.equal(runHook(fixture('unsure'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout, '');
 });
 
 test('hard prompt -> opus + high effort', () => {
   const { env } = baseEnv();
-  const u = updated(runHook(fixture('hard'), env).stdout);
+  const u = updated(runHook(fixture('hard'), env));
   assert.equal(u.model, 'opus');
   assert.equal(u.effort, 'high');
 });
 
 test('medium prompt -> sonnet + medium effort', () => {
   const { env } = baseEnv();
-  const u = updated(runHook(fixture('medium'), env).stdout);
+  const u = updated(runHook(fixture('medium'), env));
   assert.equal(u.model, 'sonnet');
   assert.equal(u.effort, 'medium');
 });
 
 test('model and effort already set by the caller are overridden (opus/max -> haiku/low)', () => {
   const { dir, env } = baseEnv();
-  const u = updated(runHook(fixture('model-set-opus'), env).stdout);
+  const u = updated(runHook(fixture('model-set-opus'), env));
   assert.equal(u.model, 'haiku');
   assert.equal(u.effort, 'low');
   const log = lastLog(dir);
@@ -137,13 +148,13 @@ test('model and effort already set by the caller are overridden (opus/max -> hai
 
 test('caller asked haiku for a hard task -> overridden to opus', () => {
   const { env } = baseEnv();
-  const u = updated(runHook(fixture('model-set-haiku'), env).stdout);
+  const u = updated(runHook(fixture('model-set-haiku'), env));
   assert.equal(u.model, 'opus');
 });
 
 test('legacy tool name Task is handled too', () => {
   const { env } = baseEnv();
-  assert.equal(updated(runHook(fixture('task-legacy'), env).stdout).model, 'haiku');
+  assert.equal(updated(runHook(fixture('task-legacy'), env)).model, 'haiku');
 });
 
 test('judge called as claude -p with no tools/MCP/settings, in an empty temp dir, with the recursion guard', () => {
@@ -238,7 +249,7 @@ test('bad stdin: exit 0, no output', () => {
 
 test('CLAUDE_CODE_EFFORT_LEVEL pins effort: model set, effort not added', () => {
   const { dir, env } = baseEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'high' });
-  const u = updated(runHook(fixture('easy'), env).stdout);
+  const u = updated(runHook(fixture('easy'), env));
   assert.equal(u.model, 'haiku');
   assert.equal(u.effort, undefined);
   assert.match(lastLog(dir).note, /CLAUDE_CODE_EFFORT_LEVEL/);
@@ -253,7 +264,7 @@ test('config file changes the mapping and the judge model', () => {
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ judgeModel: 'sonnet', routes: { easy: { model: 'claude-sonnet-5-5', effort: 'medium' } } }));
-  const u = updated(runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout);
+  const u = updated(runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg }));
   assert.equal(u.model, 'sonnet');
   assert.equal(u.effort, 'medium');
   const a = JSON.parse(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim()).args;
@@ -285,7 +296,7 @@ test('API key set: judge via the Messages API, claude -p not called', async () =
   try {
     const { dir, env } = baseEnv({ ANTHROPIC_API_KEY: 'test-key', ANTHROPIC_BASE_URL: api.url });
     const r = await runHookAsync(fixture('easy'), env);
-    assert.equal(updated(r.stdout).model, 'opus');
+    assert.equal(updated(r).model, 'opus');
     assert.equal(lastLog(dir).judge, 'api');
     assert.equal(api.seen[0].url, '/v1/messages');
     assert.equal(api.seen[0].headers['x-api-key'], 'test-key');
@@ -299,8 +310,94 @@ test('API failing: falls back to claude -p', async () => {
   try {
     const { dir, env } = baseEnv({ ANTHROPIC_API_KEY: 'test-key', ANTHROPIC_BASE_URL: api.url });
     const r = await runHookAsync(fixture('easy'), env);
-    assert.equal(updated(r.stdout).model, 'haiku');
+    assert.equal(updated(r).model, 'haiku');
     assert.equal(lastLog(dir).judge, 'cli');
     assert.ok(existsSync(join(dir, 'calls.jsonl')));
   } finally { api.srv.close(); }
+});
+
+// ---- apply modes, hand-off, cache ----
+
+test('unchanged calls hand nothing off (unsure, judge failed, fork)', () => {
+  for (const [name, extra] of [['unsure', {}], ['judge-error', {}], ['fork', {}], ['easy', { JUDGE_ROUTER_CLAUDE_BIN: '/nonexistent/claude' }]]) {
+    const { env } = baseEnv(extra);
+    noHandoff(runHook(fixture(name), env));
+  }
+});
+
+test('apply "input" (legacy, for Claude Code without hook modules): rewrites the call, no permission decision', () => {
+  const { dir, env } = baseEnv();
+  const cfg = join(dir, 'cfg.json');
+  writeFileSync(cfg, JSON.stringify({ apply: 'input' }));
+  const r = runHook(fixture('model-set-opus'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
+  const o = JSON.parse(r.stdout);
+  assert.equal(o.hookSpecificOutput.permissionDecision, undefined);
+  const orig = JSON.parse(fixture('model-set-opus')).tool_input;
+  assert.deepEqual(o.hookSpecificOutput.updatedInput, { ...orig, model: 'haiku', effort: 'low' });
+  assert.match(o.systemMessage, /opus→haiku/);
+  noHandoff(r);
+  assert.equal(lastLog(dir).apply, 'input');
+});
+
+test('the same call judged again within the TTL reuses the verdict: one judge call', () => {
+  const { dir, env } = baseEnv();
+  const a = runHook(fixture('hard'), env);
+  const b = runHook(fixture('hard'), env);
+  assert.equal(updated(a).model, 'opus');
+  assert.equal(updated(b).model, 'opus');
+  const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(calls.length, 1, 'judge called once');
+  const log = lastLog(dir);
+  assert.equal(log.judge, 'cache');
+  assert.equal(log.cached_from, 'cli');
+  assert.equal(log.judge_ms, 0);
+  assert.match(JSON.parse(b.stdout).systemMessage, /\(0\.0s\)$/);
+});
+
+test('a different prompt is not served from the cache; cacheTtlMs 0 turns the cache off', () => {
+  const { dir, env } = baseEnv();
+  runHook(fixture('hard'), env);
+  runHook(fixture('easy'), env);
+  assert.equal(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
+  const off = baseEnv();
+  const cfg = join(off.dir, 'cfg.json');
+  writeFileSync(cfg, JSON.stringify({ cacheTtlMs: 0 }));
+  runHook(fixture('hard'), { ...off.env, JUDGE_ROUTER_CONFIG: cfg });
+  runHook(fixture('hard'), { ...off.env, JUDGE_ROUTER_CONFIG: cfg });
+  assert.equal(readFileSync(join(off.dir, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
+});
+
+test('failed judge calls are not cached', () => {
+  const { dir, env } = baseEnv();
+  runHook(fixture('judge-error'), env);
+  runHook(fixture('judge-error'), env);
+  assert.equal(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
+});
+
+// ---- scripts/spawn.mjs, the hooks module's helper ----
+
+const SPAWN = join(HERE, '..', 'scripts', 'spawn.mjs');
+const helper = (cmd, payload, env) => spawnSync(process.execPath, [SPAWN, cmd], { input: JSON.stringify(payload), env, encoding: 'utf8' });
+
+test('spawn.mjs take: returns the hand-off once, then {}', () => {
+  const { env } = baseEnv();
+  runHook(fixture('easy'), env);
+  const first = JSON.parse(helper('take', { tool_use_id: 'toolu_fixture' }, env).stdout);
+  assert.equal(first.model, 'haiku');
+  assert.equal(first.effort, 'low');
+  assert.deepEqual(JSON.parse(helper('take', { tool_use_id: 'toolu_fixture' }, env).stdout), {});
+  assert.deepEqual(JSON.parse(helper('take', { tool_use_id: '../../etc/passwd' }, env).stdout), {});
+  assert.deepEqual(JSON.parse(helper('take', {}, env).stdout), {});
+});
+
+test('spawn.mjs applied: logs an "applied" line; bad input still exits 0 with {}', () => {
+  const { dir, env } = baseEnv();
+  helper('applied', { tool_use_id: 'toolu_x', agentId: 'a1', model: 'claude-haiku-5-5', effort: 'low', session_id: 's' }, env);
+  const log = lastLog(dir);
+  assert.equal(log.event, 'applied');
+  assert.equal(log.agent_id, 'a1');
+  assert.equal(log.model, 'claude-haiku-5-5');
+  const r = spawnSync(process.execPath, [SPAWN, 'take'], { input: 'not json', env, encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '{}');
 });

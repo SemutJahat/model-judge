@@ -1,6 +1,6 @@
 {
   "name": "judge-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Before every subagent starts, a small judge model rates its prompt easy / medium / hard and sets the subagent's model and effort to match, overriding whatever was set.",
   "author": {
     "name": "judge-router"

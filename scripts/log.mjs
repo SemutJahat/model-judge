@@ -22,9 +22,12 @@ for (let i = 0; i < argv.length; i++) {
 if (!Number.isFinite(n) || n < 1) n = 10;
 
 const FILE = join(dataDir(), 'decisions.jsonl');
-const parse = (text) => text.split('\n').filter(Boolean)
-  .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-  .filter((e) => e && e.status !== 'guard' && e.status !== 'not-agent' && (!session || e.session_id === session));
+const lines = (text) => text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+// tool_use_ids whose decision the hooks module applied at agent.spawn ("applied" lines)
+const applied = new Set();
+const parse = (text) => lines(text)
+  .filter((e) => (e.event === 'applied' ? (applied.add(e.tool_use_id), false) : !e.event))
+  .filter((e) => e.status !== 'guard' && e.status !== 'not-agent' && (!session || e.session_id === session));
 
 const COLS = [
   ['time', 8], ['subagent', 28], ['verdict', 7], ['conf', 4], ['model', 17], ['effort', 13], ['judge', 6], ['result', 9],
@@ -33,7 +36,9 @@ const fit = (s, w) => { s = String(s ?? ''); return s.length > w ? s.slice(0, w 
 const hhmmss = (ts) => { const d = new Date(ts); return Number.isNaN(+d) ? '' : d.toTimeString().slice(0, 8); };
 
 function row(e) {
-  const result = e.action === 'override' ? 'override' : e.status === 'unsure' ? 'unsure' : e.status === 'failed' ? 'failed' : 'skipped';
+  // "pending": decided with apply "spawn", but no "applied" line (yet) from the hooks module
+  const result = e.action === 'override' ? (e.apply === 'spawn' && !applied.has(e.tool_use_id) ? 'pending' : 'override')
+    : e.status === 'unsure' ? 'unsure' : e.status === 'failed' ? 'failed' : 'skipped';
   return {
     time: hhmmss(e.ts),
     subagent: e.description ?? '',

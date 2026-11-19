@@ -1,5 +1,8 @@
 {
   "description": "judge-router: pick each subagent's model and effort before it starts",
+  "modules": [
+    "./register.ts"
+  ],
   "hooks": {
     "PreToolUse": [
       {

@@ -9,7 +9,7 @@
       "name": "judge-router",
       "source": "./",
       "description": "Picks each subagent's model and effort with a small judge model, before it starts.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }

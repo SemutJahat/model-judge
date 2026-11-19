@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // judge-router PreToolUse hook for the Agent (Task) tool.
-// Reads the hook input on stdin; prints updatedInput with the judge's model/effort, or nothing.
+// Reads the hook input on stdin; asks the judge; logs; prints a systemMessage for the user. With apply "spawn"
+// (default) it leaves its decision for hooks/register.ts, which applies it at agent.spawn; with apply "input"
+// (legacy) it prints updatedInput instead.
 // Whatever happens it exits 0: it never blocks a subagent.
-import { decide, writeLog } from './lib.mjs';
+import { decide, writeLog, writeHandoff } from './lib.mjs';
 
 async function readStdin() {
   let s = '';
@@ -15,7 +17,9 @@ try {
   const raw = await readStdin();
   let hookInput;
   try { hookInput = JSON.parse(raw); } catch { process.exit(0); }
-  const { output, log } = await decide(hookInput);
+  const { output, log, handoff } = await decide(hookInput);
+  // apply "spawn": the decision goes to the hooks module, which applies it at agent.spawn; the call stays as written.
+  if (handoff && !writeHandoff(hookInput.tool_use_id, handoff)) log.note = 'could not write the hand-off: not applied';
   writeLog(log);
   if (output) process.stdout.write(JSON.stringify(output));
 } catch (e) {

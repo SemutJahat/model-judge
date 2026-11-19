@@ -44,28 +44,42 @@ if (subDir) {
   }
 }
 
+// Each Agent tool call's result: refused (an error result, e.g. auto mode's "a hook changed this call's input")
+const results = Object.fromEntries(stream
+  .filter((m) => m.type === 'user' && !m.parent_tool_use_id)
+  .flatMap((m) => (Array.isArray(m.message?.content) ? m.message.content : []).filter((b) => b.type === 'tool_result'))
+  .map((b) => [b.tool_use_id, b]));
+const refusals = calls.filter((c) => results[c.id]?.is_error);
+const verdicts = decisions.filter((x) => !x.event && x.status !== 'guard' && x.status !== 'not-agent');
+const applied = Object.fromEntries(decisions.filter((x) => x.event === 'applied').map((x) => [x.tool_use_id, x]));
+const requests = Object.fromEntries(decisions.filter((x) => x.event === 'request').map((x) => [x.agent_id, x]));
+
 const rows = calls.map((c) => {
-  const d = decisions.find((x) => x.tool_use_id === c.id) || {};
+  const d = verdicts.find((x) => x.tool_use_id === c.id) || {};
   const s = subagents[c.id] || {};
+  const a = applied[c.id];
+  const q = a ? requests[a.agent_id] : undefined;
   return {
     subagent: c.input.description,
     requested: [c.input.model ?? '(none)', c.input.effort].filter(Boolean).join(' / '),
-    verdict: d.difficulty ? `${d.difficulty} ${d.confidence}` : '-',
+    verdict: d.difficulty ? `${d.difficulty} ${d.confidence}${d.judge === 'cache' ? ' (cache)' : ''}` : '-',
     hook: d.action === 'override' ? `${d.model_after} / ${d.effort_after}` : d.action ? 'unchanged' : '(no hook run)',
-    started_with: s.meta ? `${s.meta.model ?? '(default)'} / ${s.meta.effort ?? '(default)'}` : '?',
-    ran_on: s.models?.join(', ') || '?',
+    call: results[c.id]?.is_error ? 'REFUSED' : 'ran',
+    started_on: a?.model ?? (s.meta ? `${s.meta.model ?? '(default)'} (meta)` : '-'),
+    first_request: q ? `${q.model} / ${q.effort ?? '(none)'}` : '-',
+    ran_on: s.models?.join(', ') || (results[c.id]?.is_error ? '-' : '?'),
     why: d.why || d.reason || '',
   };
 });
 
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ session: sessionId, rows, modelUsage: result?.modelUsage }, null, 2));
+  console.log(JSON.stringify({ session: sessionId, rows, refused: refusals.length, calls: calls.length, modelUsage: result?.modelUsage }, null, 2));
   process.exit(0);
 }
 
 const cols = [
-  ['subagent', 'Subagent'], ['requested', 'Requested'], ['verdict', 'Judge verdict'],
-  ['hook', 'Hook set'], ['started_with', 'Started with (meta)'], ['ran_on', 'Ran on (transcript)'],
+  ['subagent', 'Subagent'], ['requested', 'Requested'], ['verdict', 'Judge verdict'], ['hook', 'Decision'], ['call', 'Call'],
+  ['started_on', 'Started on (agent.spawn)'], ['first_request', 'First request (model / effort)'], ['ran_on', 'Ran on (transcript)'],
 ];
 const width = cols.map(([k, h]) => Math.max(h.length, ...rows.map((r) => String(r[k]).length)));
 const line = (vals) => '| ' + vals.map((v, i) => String(v).padEnd(width[i])).join(' | ') + ' |';
@@ -74,6 +88,12 @@ console.log('|' + width.map((w) => '-'.repeat(w + 2)).join('|') + '|');
 for (const r of rows) console.log(line(cols.map(([k]) => r[k])));
 console.log('');
 for (const r of rows) console.log(`judge on "${r.subagent}": ${r.why}`);
+const tasks = new Set(calls.map((c) => c.input.description)).size;
+const paid = verdicts.filter((x) => x.judge && x.judge !== 'cache').length;
+console.log('');
+console.log(`Agent calls: ${calls.length} for ${tasks} subagent task(s); refused: ${refusals.length}; judge calls: ${paid}` +
+  ` (+${verdicts.filter((x) => x.judge === 'cache').length} from cache)`);
+for (const c of refusals) console.log(`refused "${c.input.description}": ${JSON.stringify(results[c.id].content).slice(0, 300)}`);
 if (result?.modelUsage) {
   console.log('');
   console.log('models billed in the session: ' + Object.entries(result.modelUsage)

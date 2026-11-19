@@ -9,17 +9,25 @@ It needs nothing besides Claude Code and Node: the judge runs on your own Claude
 
 ## What it does
 
-- A `PreToolUse` hook on the subagent tool (matcher `Agent|Task`). In Claude Code 2.1.328 the tool is
-  named `Agent`; `Task` is its legacy alias.
-- The hook reads the tool input from stdin. It sends the `prompt`, `description` and `subagent_type` to the judge,
-  which answers `{"difficulty", "confidence", "why"}`.
-- It answers Claude Code with `hookSpecificOutput.updatedInput`: the original input, with `model` and `effort`
-  set from the route of that difficulty.
-- It sets no `permissionDecision`. The call still goes through Claude Code's normal permission check, and the
-  hook neither approves nor denies anything.
-- It shows you one line per subagent call (its verdict and the model and effort it set), adds a
-  `/judge-router:log` command, and ships an optional status line. See
-  [Seeing what the judge does](#seeing-what-the-judge-does).
+Two parts work together; both ship in `hooks/hooks.json`:
+
+1. **A `PreToolUse` hook** on the subagent tool (matcher `Agent|Task`; in Claude Code 2.1.328 the tool is `Agent`,
+   `Task` its legacy alias), `scripts/route.mjs`. It sends the call's `prompt`, `description` and `subagent_type`
+   to the judge, which answers `{"why", "difficulty", "confidence"}`, logs the decision, and shows you one line
+   under the call. It **does not change the call**: no `updatedInput`, no `permissionDecision`. It leaves its
+   decision (model, effort) in `~/.claude/judge-router/pending/<tool_use_id>.json`.
+2. **A hooks module**, `hooks/register.ts`, which Claude Code runs inside the session. At **`agent.spawn`**, when
+   the call has passed every permission check and the subagent is about to start, it takes that decision and
+   sets the subagent's **model**. On that subagent's **`turn.step`** (each model request it makes) it sets the
+   **effort**. It runs `scripts/spawn.mjs` for the hand-off and logs what was really applied.
+
+Why two parts: auto mode reviews a tool call as the model wrote it, and **refuses a call that a hook rewrote
+after that review**. A `PreToolUse` hook that returned `updatedInput` (what judge-router 0.1 did) got every
+changed subagent call refused in auto mode, and the model then sent each call a second time. Setting the model
+at spawn time leaves the reviewed call untouched. See [Auto mode](#auto-mode-why-the-call-is-not-rewritten).
+
+It also adds a `/judge-router:log` command and ships an optional status line. See
+[Seeing what the judge does](#seeing-what-the-judge-does).
 
 Default routes (in `config.json`):
 
@@ -32,12 +40,12 @@ Default routes (in `config.json`):
 ### The override rule
 
 When the judge answers with confidence ≥ the threshold (default **0.75**), its model **always replaces** the
-`model` in the call, whether the main agent set one, the agent definition's frontmatter set one, or nobody did.
-It does this even when the model is the same. The Agent tool's `model` field takes precedence over the
-definition's `model:` frontmatter and over `CLAUDE_CODE_SUBAGENT_MODEL`, so setting it on the call is enough.
-The judge's effort replaces `effort` the same way.
+subagent's model, whether the main agent set one, the agent definition's frontmatter set one, or nobody did.
+It does this even when the model is the same. `agent.spawn`'s `model` is the Agent call's `model` parameter,
+which outranks the definition's `model:` frontmatter and `CLAUDE_CODE_SUBAGENT_MODEL`. The judge's effort
+replaces the subagent's effort on every request it makes.
 
-The input is left **unchanged** (and the hook exits 0) when:
+The subagent starts **as asked** (and the hook exits 0) when:
 
 - the judge is unsure (confidence < threshold);
 - the judge fails: `claude` not found, it exits non-zero, or its answer isn't the expected JSON;
@@ -46,24 +54,76 @@ The input is left **unchanged** (and the hook exits 0) when:
 - `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set, since Claude Code then removes `model` from the tool;
 - the hook runs inside the judge itself (`JUDGE_ROUTER_INNER=1`, the recursion guard).
 
-It never blocks a subagent: every path exits 0, and any error only leaves the call as it was.
+It never blocks a subagent: every path exits 0, the module's `agent.spawn` hook starts the subagent as asked
+if anything in it fails, and any error only leaves the call as it was.
 
-## Effort: it can be set per call
+The same call judged again within `cacheTtlMs` (default 10 minutes) reuses the verdict instead of paying the
+judge again: the log says `"judge": "cache"`, and the line shows `(0.0s)`. The cache key covers the judge's
+model, its instructions and the task text (prompt, description, subagent type), and failed calls are not
+cached. It lives in `~/.claude/judge-router/cache.json`.
 
-Claude Code 2.1.328's Agent tool has an `effort` field: `low | medium | high | xhigh | max`. It is a zod enum in
-the tool's schema, next to `model: sonnet | opus | haiku | fable`. A hook's `updatedInput` can set it, so
-judge-router sets the judge's effort on every call it routes. The real run below shows the subagents ran with
-the effort the hook set: each subagent's `meta.json` in the session transcript records it.
+## Auto mode: why the call is not rewritten
+
+What judge-router 0.1 did, and what happened in auto mode (reproduced in a headless `claude -p --permission-mode
+auto` run of `examples/prompts/mixed.md`): all three Agent calls came back with
+
+> The server-side auto mode classifier gave no verdict for Agent: a hook changed this call's input after auto
+> mode reviewed it, so the review does not cover what would run. This is not a judgment that the action is
+> unsafe. The hook produced this input: {"description":"count words",…,"model":"haiku","effort":"low",…}
+
+The same refusal came for `slugify with tests` (sonnet→sonnet), because adding `effort` alone changes the input.
+Claude Code's text tells the model to "issue the call once more with exactly that input". So the model sent all
+three again, and the hook judged them again: 6 Agent calls and 6 judge calls for 3 subagents. In the owner's
+session, the second round carried the hook's own model and effort, so the hook changed nothing and the calls
+ran. In the headless run, the second round asked for `sonnet` again and was refused again.
+
+This is by design in Claude Code 2.1.328. Auto mode's classifier reviews each tool call server-side, as the
+model wrote it, so any `updatedInput` voids the review. A `permissionDecision` of `"allow"` with
+`updatedInput` doesn't help: in auto mode a hook's allow is still sent to the classifier ("auto mode requires
+classifier adjudication"), which has only seen the original input. And an `"allow"` would skip the user's
+permission prompts in the other modes, which judge-router must not do.
+
+The fix uses the hooks-module events that Claude Code 2.1.328 gives plugins for this:
+- **`agent.spawn`:** "A hook sets this to pick the subagent's model". It runs after the call was reviewed
+  and allowed.
+- **`turn.step`:** "A hook rewrites `model` or `effort` going down", for one model request.
+
+Neither event changes the tool call, so no review is voided, and nothing is approved that wouldn't be anyway.
+Tested in real headless runs of the mixed prompt in each permission mode, with 3 subagents requesting `sonnet`:
+
+| mode | Agent calls | refused | judge calls | first requests (model / effort) |
+|---|---|---|---|---|
+| auto (0.1, before) | 6 | 6 | 6 | none ran |
+| default | 3 | 0 | 3 | haiku/low · sonnet/medium · opus/high |
+| acceptEdits | 3 | 0 | 3 | haiku/low · sonnet/medium · opus/high |
+| auto | 3 | 0 | 3 | haiku/low · sonnet/medium · opus/high |
+| bypassPermissions | 3 | 0 | 3 | haiku/low · sonnet/medium · opus/high |
+
+An interactive session in auto mode, using the installed plugin, gave the same result (see
+[Seeing what the judge does](#seeing-what-the-judge-does)).
+
+**Older Claude Code.** The module needs hook modules (`agent.spawn`, `turn.step`), which Claude Code 2.1.328
+has. On a version without them, set `"apply": "input"` in the config. That brings back the 0.1 behaviour
+(`updatedInput` on the call), which works in default, acceptEdits and bypassPermissions modes but not in auto.
+
+## Effort: it is set per request
+
+`agent.spawn` takes no effort, but `turn.step` does: each model request of a subagent passes through it, and a
+hook may set its `effort` (`low | medium | high | xhigh | max`). The module remembers the effort for each
+subagent it started (by `agentId`) and sets it on every request that subagent makes. After the first request,
+it reads what that request really carried (`$.agent.list()`'s `lastRequest`, "the request as it went out, past
+caps, fallbacks and a hook's rewrite") and logs it as a `"request"` line. That is the evidence the effort
+reached the API. The real runs above show low / medium / high there.
 
 Limits found in Claude Code:
 
-- **`CLAUDE_CODE_EFFORT_LEVEL` pins effort.** When it is set (to anything but `auto`/`unset`), Claude Code removes
-  `effort` from the Agent tool. A hook input that fails the schema check makes Claude Code deny the call, so
-  in that case judge-router sets only the model and leaves effort alone (the log notes it).
-- `CLAUDE_CODE_SUBAGENT_EFFORT` is only the default when a call sets no effort, so the hook's effort wins over it.
-- For `subagent_type: "fork"`, Claude Code ignores both fields, and the hook doesn't touch forks.
-- The plugin can't show that the effort reaches the API request itself. Claude Code doesn't log the effort
-  parameter of a request. What the transcript shows is the effort the subagent was started with.
+- Since the call isn't rewritten, a subagent's `meta.json` in the transcript shows the model but no effort
+  (`effort: null`). The `"request"` lines in the log show the effort that was sent.
+- **`CLAUDE_CODE_EFFORT_LEVEL`** pins the session's effort. When it is set (to anything but `auto`/`unset`),
+  judge-router sets only the model and leaves effort alone (the log notes it).
+- The module's effort table lives in its memory: if Claude Code reloads the plugin while a subagent runs,
+  that subagent's later requests go back to their default effort, but its model stays.
+- Forks inherit the parent's model and effort, and the hook doesn't touch them.
 
 ## Latency
 
@@ -71,7 +131,8 @@ Each routed subagent waits for one judge call before it starts. Measured on this
 2.1.328, judge `claude -p --model haiku` → Claude Haiku 5.5, no API key), over 12 real calls:
 **2.7 s to 4.2 s, median ≈ 3.2 s**, about $0.0002 per call. A bare `claude -p` judge call timed with `time`:
 3.07 s wall, of which the model took 2.0 s (`duration_ms`). The API path skips the CLI's start-up and should be
-faster, but no API key was available here to time it.
+faster, but no API key was available here to time it. A cache hit (the same call within 10 minutes) costs
+nothing: no judge call. The module's hand-off adds two short `node` runs per subagent (about 50 ms each).
 
 ## Seeing what the judge does
 
@@ -99,6 +160,26 @@ started four subagents, all requesting `sonnet`:
 The subagents' transcripts confirm it: `count words` ran on `claude-haiku-5-5` (effort low), `slugify with tests`
 on `claude-sonnet-5-5` (medium), `rate limiter design` on `claude-opus-5-5` (high), and `vague task` stayed on
 `claude-sonnet-5-5` with no effort set.
+
+In **auto mode**, with the plugin installed (`claude --permission-mode auto --model sonnet`, the mixed prompt),
+the capture shows one launch, no refusals, and judge-router's status line at the bottom:
+
+```
+⏺ 3 background agents launched (↓ to manage)
+   ├ count words
+   ├ slugify with tests
+   └ distributed rate limiter
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "count words" → easy 0.97 · sonnet→haiku · effort low (3.1s)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "slugify with tests" → medium 0.90 · sonnet→sonnet · effort medium (4.0s)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "distributed rate limiter" → hard 0.90 · sonnet→opus · effort high (3.0s)
+…
+⏺ Agent "distributed rate limiter" finished · 24s
+──────────────────────────────────────────────
+❯
+──────────────────────────────────────────────
+  ⚖ opus/high · hard 0.90 · "distributed rate limiter"
+  ⏵⏵ auto mode on (shift+tab to cycle) · /tasks to see subagents
+```
 
 The other forms of the line:
 
@@ -165,6 +246,9 @@ To try it for one session without editing any settings file:
 If you already have a status line, call both from one command, and pass the same stdin to each:
 `sh -c 'i=$(cat); printf %s "$i" | your-statusline; printf " "; printf %s "$i" | node …/statusline.mjs'`.
 
+To remove it, delete the `"statusLine"` entry from `~/.claude/settings.json` (or restore the backup you made
+before adding it). New sessions then show no status line.
+
 ## Try it yourself
 
 None of these install anything. They use the plugin straight from this folder.
@@ -226,11 +310,13 @@ session's, in `~/.claude/projects/<project folder>/<session id>/subagents/`:
 
 ```sh
 S=$(echo ~/.claude/projects/*/SESSION_ID/subagents)   # SESSION_ID: from the log line's session_id
-cat $S/agent-*.meta.json                    # {"description":…, "model":"haiku", "effort":"low", "toolUseId":…}
+cat $S/agent-*.meta.json                    # {"description":…, "model":"haiku", "effort":null, "toolUseId":…}
 jq -r 'select(.type=="assistant") | .message.model' $S/agent-*.jsonl | sort | uniq -c   # e.g. claude-haiku-5-5
 ```
 
-`toolUseId` in `meta.json` is the `tool_use_id` of the log line, so the two can be matched.
+`toolUseId` in `meta.json` is the `tool_use_id` of the log line, so the two can be matched. `meta.json`'s
+`effort` stays `null`, because the effort is set per request, not on the call. The log's `"request"` line
+for the subagent (matched by `agent_id`) shows the effort its first request carried.
 
 ## Install / uninstall
 
@@ -288,6 +374,8 @@ claude --plugin-dir ~/Script/claude-judge-router
   "maxPromptChars": 6000,                // the prompt is cut to this before it goes to the judge
   "setEffort": true,
   "display": "all",                      // the line under each subagent call: "all" | "changes" | "off"
+  "apply": "spawn",                      // "spawn": set at agent.spawn/turn.step (works in auto mode); "input": 0.1's updatedInput
+  "cacheTtlMs": 600000,                  // reuse a verdict for the same call for 10 min; 0 turns the cache off
   "routes": { "easy": {...}, "medium": {...}, "hard": {...} }
 }
 ```
@@ -316,8 +404,19 @@ Every decision is one JSON line in **`~/.claude/judge-router/decisions.jsonl`** 
 ```
 
 `action` is `override` or `unchanged`. `status` is `override`, `unsure`, `failed` or `skipped`, and an
-unchanged line has a `reason`. `prompt_head` is the prompt's first
-200 characters.
+unchanged line has a `reason`. `prompt_head` is the prompt's first 200 characters. `judge` is `cli`, `api` or
+`cache`. `apply` is `spawn` or `input`.
+
+The hooks module adds two lines per routed subagent, with an `event` field (the views skip them):
+
+```json
+{"event":"applied","tool_use_id":"toolu_…","agent_id":"a168964b54e9438ea","model":"claude-haiku-5-5","effort":"low"}
+{"event":"request","agent_id":"a168964b54e9438ea","model":"claude-haiku-5-5","effort":"low","wanted":"low"}
+```
+
+`applied` is written at `agent.spawn`, and `model` is what Claude Code resolved for the subagent. `request` is
+what its first model request really carried. A decision with no `applied` line shows as `pending` in
+`log.mjs`, meaning the module didn't apply it (for example, because hook modules aren't available).
 
 ```sh
 tail -f ~/.claude/judge-router/decisions.jsonl | jq -c '{description, difficulty, confidence, model_before, model_after, effort_after, why}'
@@ -326,7 +425,7 @@ tail -f ~/.claude/judge-router/decisions.jsonl | jq -c '{description, difficulty
 ## Tests
 
 ```sh
-npm test            # node --test test/: 40 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
+npm test            # node --test test/: 49 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
 ./test/real-run.sh  # the real check below, costs a few cents (same machinery as examples/demo.sh)
 ```
 
@@ -340,22 +439,25 @@ shown to the user in each case and each `display` mode; the status line text; th
 ### Real run (evidence)
 
 `examples/demo.sh` and `test/real-run.sh` run a headless `claude -p --plugin-dir <this folder> --setting-sources ""
---strict-mcp-config --model sonnet` session in a temp folder (`test/headless-run.sh`). Nothing is installed and
-no settings files are read. Afterwards `test/run-report.mjs` matches each subagent's tool call, log line and
-transcript by `tool_use_id`. The demo run of 2026-11-19 (three subagents in one go, all requesting `sonnet`):
+--strict-mcp-config --model sonnet` session in a temp folder (`test/headless-run.sh`; set `PERMISSION_MODE` to
+pick the mode). Nothing is installed and no settings files are read. Afterwards `test/run-report.mjs` matches
+each Agent call's tool call, result, log lines and transcript by `tool_use_id`. Here is the auto-mode run of
+2026-11-19 (three subagents in one go, all requesting `sonnet`):
 
 ```
-| Subagent                 | Requested | Judge verdict | Hook set        | Started with (meta) | Ran on (transcript) |
-|--------------------------|-----------|---------------|-----------------|---------------------|---------------------|
-| count words              | sonnet    | easy 0.97     | haiku / low     | haiku / low         | claude-haiku-5-5    |
-| slugify with tests       | sonnet    | medium 0.9    | sonnet / medium | sonnet / medium     | claude-sonnet-5-5   |
-| distributed rate limiter | sonnet    | hard 0.8      | opus / high     | opus / high         | claude-opus-5-5     |
-
-models billed in the session: claude-sonnet-5-5 (2311 output tokens, $0.1006), claude-haiku-5-5 (49 output tokens, $0.0005), claude-opus-5-5 (1251 output tokens, $0.0420)
+| Subagent                 | Requested | Judge verdict | Decision        | Call | Started on (agent.spawn) | First request (model / effort) | Ran on (transcript) |
+|--------------------------|-----------|---------------|-----------------|------|--------------------------|--------------------------------|---------------------|
+| count words              | sonnet    | easy 0.97     | haiku / low     | ran  | claude-haiku-5-5         | claude-haiku-5-5 / low         | claude-haiku-5-5    |
+| slugify with tests       | sonnet    | medium 0.9    | sonnet / medium | ran  | claude-sonnet-5-5        | claude-sonnet-5-5 / medium     | claude-sonnet-5-5   |
+| distributed rate limiter | sonnet    | hard 0.9      | opus / high     | ran  | claude-opus-5-5          | claude-opus-5-5 / high         | claude-opus-5-5     |
+Agent calls: 3 for 3 subagent task(s); refused: 0; judge calls: 3 (+0 from cache)
 ```
 
-"Started with" comes from each subagent's `agent-*.meta.json` and "Ran on" from the `message.model` of its
-responses in `agent-*.jsonl`. The earlier two-subagent `test/real-run.sh` run gave the same result: the echo
-subagent ran on `claude-haiku-5-5` at effort low, and the design subagent on `claude-opus-5-5` at effort high.
-The main transcript still shows each call as the model wrote it (`model: "sonnet"`), because the hook's change
-applies when the tool runs. The hook set no permission decision, and every subagent started normally.
+How to read the columns:
+- **Started on:** the `applied` log line, written at `agent.spawn`.
+- **First request:** the `request` log line, the model and effort as sent.
+- **Ran on:** the `message.model` of the subagent's responses in its `agent-*.jsonl`.
+
+The main transcript still shows each call as the model wrote it (`model: "sonnet"`), and that is the point: the
+call isn't rewritten, so auto mode's review of it holds. The default, acceptEdits and bypassPermissions runs
+gave the same table.

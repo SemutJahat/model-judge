@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,4 +61,21 @@ test('log.mjs: --session filter and --json', () => {
 test('log.mjs: empty log says so', () => {
   const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, JUDGE_ROUTER_DIR: mkdtempSync(join(tmpdir(), 'jr-empty-')) }, encoding: 'utf8' });
   assert.match(r.stdout, /^no decisions yet in /);
+});
+
+test('log.mjs: a spawn-mode decision is "override" once the module logged it applied, "pending" before', () => {
+  const d = mkdtempSync(join(tmpdir(), 'jr-applied-'));
+  const base = { ts: '2026-11-19T15:44:07.000Z', session_id: 'S', tool: 'Agent', model_before: 'sonnet', effort_before: null,
+    judge_ms: 3000, difficulty: 'easy', confidence: 0.9, action: 'override', status: 'override', apply: 'spawn', model_after: 'haiku', effort_after: 'low' };
+  writeFileSync(join(d, 'decisions.jsonl'), [
+    { ...base, tool_use_id: 'a', description: 'applied one' },
+    { ts: base.ts, event: 'applied', tool_use_id: 'a', agent_id: 'x', model: 'claude-haiku-5-5', effort: 'low' },
+    { ...base, tool_use_id: 'b', description: 'pending one' },
+  ].map((o) => JSON.stringify(o)).join('\n') + '\n');
+  const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, JUDGE_ROUTER_DIR: d }, encoding: 'utf8' });
+  const rows = r.stdout.trim().split('\n');
+  assert.match(rows[2], /applied one .* override$/);
+  assert.match(rows[3], /pending one .* pending$/);
+  assert.match(rows[4], /^\(2 of 2,/);
+  assert.equal(statusText(lastDecision(join(d, 'decisions.jsonl'), 'S')), '⚖ haiku/low · easy 0.90 · "pending one"');
 });

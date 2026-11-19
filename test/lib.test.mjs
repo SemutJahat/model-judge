@@ -1,7 +1,10 @@
 // Unit tests of the pure parts of lib.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVerdict, toModelAlias, toEffort, fieldsAllowed, decide, DEFAULT_CONFIG, askJudge, formatMessage } from '../scripts/lib.mjs';
+import { parseVerdict, toModelAlias, toEffort, fieldsAllowed, decide, DEFAULT_CONFIG, askJudge, formatMessage, askJudgeCached, cacheKey, JUDGE_SYSTEM } from '../scripts/lib.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const LEVELS = ['easy', 'medium', 'hard'];
 const input = (extra = {}) => ({ tool_name: 'Agent', tool_input: { description: 'd', prompt: 'p', ...extra } });
@@ -35,24 +38,27 @@ test('fieldsAllowed follows the env vars that drop fields from the Agent schema'
 test('decide: override at the threshold, unchanged just below it', async () => {
   const cfg = DEFAULT_CONFIG;
   const at = await decide(input(), { env: {}, cfg, judge: stub({ difficulty: 'hard', confidence: 0.75, why: '' }) });
-  assert.equal(at.output.hookSpecificOutput.updatedInput.model, 'opus');
+  assert.equal(at.handoff.model, 'opus');
+  assert.equal(at.output.hookSpecificOutput, undefined);
   const below = await decide(input(), { env: {}, cfg, judge: stub({ difficulty: 'hard', confidence: 0.74, why: '' }) });
   assert.equal(below.output.hookSpecificOutput, undefined);
+  assert.equal(below.handoff, undefined);
   assert.match(below.output.systemMessage, /unsure 0\.74/);
 });
 
 test('decide: always sets the model even when the judge agrees with the caller', async () => {
   const r = await decide(input({ model: 'opus' }), { env: {}, cfg: DEFAULT_CONFIG, judge: stub({ difficulty: 'hard', confidence: 0.9, why: '' }) });
-  assert.equal(r.output.hookSpecificOutput.updatedInput.model, 'opus');
+  assert.equal(r.handoff.model, 'opus');
   assert.equal(r.log.action, 'override');
 });
 
 test('decide: setEffort false leaves effort as the caller had it', async () => {
   const cfg = { ...DEFAULT_CONFIG, setEffort: false };
   const r = await decide(input({ effort: 'max' }), { env: {}, cfg, judge: stub({ difficulty: 'easy', confidence: 0.9, why: '' }) });
-  const u = r.output.hookSpecificOutput.updatedInput;
-  assert.equal(u.model, 'haiku');
-  assert.equal(u.effort, 'max');
+  assert.equal(r.handoff.model, 'haiku');
+  assert.equal(r.handoff.effort, undefined, 'no effort handed off: the caller\'s stays');
+  const legacy = await decide(input({ effort: 'max' }), { env: {}, cfg: { ...cfg, apply: 'input' }, judge: stub({ difficulty: 'easy', confidence: 0.9, why: '' }) });
+  assert.equal(legacy.output.hookSpecificOutput.updatedInput.effort, 'max');
 });
 
 test('decide: a judge that throws never escapes', async () => {
@@ -100,4 +106,24 @@ test('formatMessage: display modes', () => {
   assert.match(fm({ status: 'failed', reason: 'judge failed: x' }, 'changes'), /judge failed/);
   assert.equal(fm({ status: 'skipped', reason: 'fork: x' }, 'changes'), undefined);
   assert.equal(fm(changed, 'off'), undefined);
+});
+
+test('askJudgeCached: hit within TTL, miss after it, key covers model, instructions and task', async () => {
+  const env = { JUDGE_ROUTER_DIR: mkdtempSync(join(tmpdir(), 'jr-cache-')) };
+  let calls = 0, t = 1000;
+  const judge = async () => (calls++, { verdict: { difficulty: 'easy', confidence: 0.9, why: '' }, judge: 'cli', ms: 3000 });
+  const cfg = { ...DEFAULT_CONFIG, cacheTtlMs: 60000 };
+  const inp = { prompt: 'p', description: 'd' };
+  assert.equal((await askJudgeCached(inp, cfg, env, judge, () => t)).judge, 'cli');
+  t += 59000;
+  const hit = await askJudgeCached(inp, cfg, env, judge, () => t);
+  assert.equal(hit.judge, 'cache');
+  assert.equal(hit.ms, 0);
+  assert.equal(calls, 1);
+  t += 2000;
+  assert.equal((await askJudgeCached(inp, cfg, env, judge, () => t)).judge, 'cli');
+  assert.equal(calls, 2);
+  assert.notEqual(cacheKey(inp, cfg), cacheKey({ ...inp, prompt: 'q' }, cfg));
+  assert.notEqual(cacheKey(inp, cfg), cacheKey(inp, { ...cfg, judgeModel: 'sonnet' }));
+  assert.ok(JUDGE_SYSTEM.includes('never easy'));
 });

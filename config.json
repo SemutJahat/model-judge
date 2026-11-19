@@ -7,6 +7,8 @@
   "maxPromptChars": 6000,
   "setEffort": true,
   "display": "all",
+  "apply": "spawn",
+  "cacheTtlMs": 600000,
   "routes": {
     "easy":   { "model": "haiku",  "effort": "low" },
     "medium": { "model": "sonnet", "effort": "medium" },

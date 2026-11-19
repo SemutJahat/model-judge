@@ -31,7 +31,7 @@ export function lastDecision(file, sessionId) {
     for (const l of lines) {
       let e;
       try { e = JSON.parse(l); } catch { continue; }
-      if (e.status === 'guard' || e.status === 'not-agent') continue;
+      if (e.event || e.status === 'guard' || e.status === 'not-agent') continue;
       if (!sessionId || e.session_id === sessionId) return e;
     }
   } finally { closeSync(fd); }

@@ -1,6 +1,7 @@
 // judge-router: the logic of the PreToolUse hook, kept free of process I/O so tests can drive it.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, appendFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, appendFileSync, existsSync, writeFileSync, renameSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,8 @@ export const DEFAULT_CONFIG = {
   maxPromptChars: 6000,
   setEffort: true,
   display: 'all',
+  apply: 'spawn',
+  cacheTtlMs: 600000,
   claudeBin: 'claude',
   routes: {
     easy: { model: 'haiku', effort: 'low' },
@@ -63,12 +66,19 @@ export function toEffort(e) {
 }
 
 export const JUDGE_SYSTEM = `You rate how hard a task given to a coding subagent is, to pick the model that runs it.
-easy: mechanical work that needs almost no reasoning (count or look something up, grep-and-report, a rename or one-line edit, repeat or summarize given text).
-medium: ordinary engineering that needs real but bounded reasoning (write a new function or module with its edge cases and tests, a fix or feature across a few files, a focused review, a moderate investigation). Writing new code that must handle edge cases and come with tests is medium, even when it is a single small function.
-hard: open-ended or deep work (system or architecture design and its trade-offs, distributed systems, subtle concurrency or security, hard debugging, broad refactors, research needing judgment).
+easy: mechanical work that needs almost no reasoning: count or look something up, grep-and-report, a rename or one-line edit, repeat or summarize given text.
+medium: ordinary engineering that needs real but bounded reasoning: write new code (a function, a module, a script) that must handle edge cases, write tests, a fix or feature across a few files, a focused review, a moderate investigation. Any task that asks for new code plus its edge cases or its tests is medium, never easy, however small the function.
+hard: open-ended or deep work: system or architecture design and its trade-offs, distributed systems, subtle concurrency or security, hard debugging, broad refactors, research needing judgment.
+Examples:
+- "Count the words in this sentence" -> easy
+- "Find where MAX_RETRIES is defined and report the file" -> easy
+- "Write a parse_duration(s) function that handles units, bad input and empty strings, with unit tests" -> medium
+- "Write a slugify function handling unicode and repeated separators, with pytest tests" -> medium
+- "Add a /health endpoint with a test" -> medium
+- "Design a distributed rate limiter and explain its trade-offs" -> hard
 confidence: how sure you are of the difficulty. If the task is too vague or lacks the context to tell what work it means (e.g. "fix it", "look into it"), the difficulty is a guess: give a confidence below 0.5.
-Reply with ONLY a JSON object, no prose, no code fence:
-{"difficulty":"easy"|"medium"|"hard","confidence":<0..1>,"why":"<one short sentence>"}`;
+First say why in one short sentence, then decide. Reply with ONLY a JSON object, no prose, no code fence:
+{"why":"<one short sentence>","difficulty":"easy"|"medium"|"hard","confidence":<0..1>}`;
 
 export function judgeUserPrompt(input, maxChars = 6000) {
   let prompt = String(input.prompt ?? '');
@@ -194,6 +204,86 @@ export async function askJudge(input, cfg, env = process.env, impl = { api: judg
   return { error: errors.join('; '), ms: Date.now() - t0 };
 }
 
+// ---- verdict cache ----------------------------------------------------------------------------
+
+// The same call judged again within cacheTtlMs (a retry, a re-sent call) reuses the verdict instead of paying
+// the judge again. The key covers everything the judge sees: its model, its instructions and the task text.
+export function cacheKey(input, cfg) {
+  return createHash('sha256')
+    .update(JSON.stringify([cfg.judgeModel, cfg.judgeApiModel, JUDGE_SYSTEM, judgeUserPrompt(input, cfg.maxPromptChars)]))
+    .digest('hex').slice(0, 32);
+}
+
+function readCache(env) {
+  try { return JSON.parse(readFileSync(join(dataDir(env), 'cache.json'), 'utf8')); } catch { return {}; }
+}
+
+function writeCache(cache, env) {
+  try {
+    const dir = dataDir(env);
+    mkdirSync(dir, { recursive: true });
+    const tmp = join(dir, `cache.json.${process.pid}.tmp`);
+    writeFileSync(tmp, JSON.stringify(cache));
+    renameSync(tmp, join(dir, 'cache.json')); // atomic: concurrent hooks never read half a file
+  } catch { /* a cache that can't be written is only slower */ }
+}
+
+export async function askJudgeCached(input, cfg, env = process.env, judge = askJudge, now = Date.now) {
+  const ttl = Number(cfg.cacheTtlMs) || 0;
+  if (ttl <= 0) return judge(input, cfg, env);
+  const key = cacheKey(input, cfg);
+  const hit = readCache(env)[key];
+  if (hit && now() - hit.at < ttl && hit.verdict) return { verdict: hit.verdict, judge: 'cache', ms: 0, cachedFrom: hit.judge };
+  const r = await judge(input, cfg, env);
+  if (r.verdict) {
+    const cache = readCache(env);
+    for (const [k, v] of Object.entries(cache)) if (!(now() - v.at < ttl)) delete cache[k];
+    cache[key] = { at: now(), verdict: r.verdict, judge: r.judge };
+    const keys = Object.keys(cache);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete cache[k];
+    writeCache(cache, env);
+  }
+  return r;
+}
+
+// ---- hand-off to the hooks module ------------------------------------------------------------
+
+// apply "spawn": the PreToolUse hook leaves the tool call as written (so auto mode's review of it stays valid)
+// and leaves its decision here; the plugin's hooks module (hooks/register.ts) takes it at agent.spawn, sets the
+// subagent's model there and its effort on the subagent's model requests (turn.step).
+function pendingPath(toolUseId, env) {
+  const id = String(toolUseId ?? '').replace(/[^A-Za-z0-9_-]/g, '');
+  return id ? join(dataDir(env), 'pending', `${id}.json`) : undefined;
+}
+
+export function writeHandoff(toolUseId, decision, env = process.env) {
+  const f = pendingPath(toolUseId, env);
+  if (!f) return false;
+  try {
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify({ ...decision, at: Date.now() }));
+    return true;
+  } catch { return false; }
+}
+
+// Read and remove a call's decision; also sweeps hand-offs older than an hour (calls that never spawned).
+export function takeHandoff(toolUseId, env = process.env, now = Date.now) {
+  const f = pendingPath(toolUseId, env);
+  let d;
+  if (f && existsSync(f)) {
+    try { d = JSON.parse(readFileSync(f, 'utf8')); } catch {}
+    try { rmSync(f, { force: true }); } catch {}
+  }
+  try {
+    const dir = join(dataDir(env), 'pending');
+    for (const n of readdirSync(dir)) {
+      const p = join(dir, n);
+      if (now() - statSync(p).mtimeMs > 3600000) rmSync(p, { force: true });
+    }
+  } catch {}
+  return d;
+}
+
 // ---- the decision -----------------------------------------------------------------------------
 
 // Can this session's Agent tool take the field at all? Claude Code drops `model` from the schema when
@@ -207,8 +297,7 @@ export function fieldsAllowed(env = process.env) {
   };
 }
 
-// Returns { output, log }: output is the hook's stdout object (or null for "leave unchanged").
-// Returns { output, log }: output is the hook's stdout object, or null for "say and change nothing".
+// Returns { output, log, handoff? }: output is the hook's stdout object, or null for "say and change nothing".
 // When config.display allows it, output carries a systemMessage: the one line Claude Code shows the user.
 export async function decide(hookInput, opts = {}) {
   const cfg = opts.cfg ?? loadConfig(opts.env ?? process.env);
@@ -218,7 +307,7 @@ export async function decide(hookInput, opts = {}) {
   return r;
 }
 
-async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env), judge = askJudge } = {}) {
+async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env), judge = askJudgeCached } = {}) {
   const tool = hookInput?.tool_name;
   const input = hookInput?.tool_input;
   const log = {
@@ -246,7 +335,7 @@ async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env),
   if (!allowed.model) return unchanged('CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set: the Agent tool takes no model');
 
   const r = await judge(input, cfg, env);
-  const jlog = { judge: r.judge ?? null, judge_ms: r.ms };
+  const jlog = { judge: r.judge ?? null, judge_ms: r.ms, ...(r.cachedFrom ? { cached_from: r.cachedFrom } : {}) };
   if (r.error) return unchanged(`judge failed: ${r.error}`, jlog, 'failed');
   const { difficulty, confidence, why } = r.verdict;
   Object.assign(jlog, { difficulty, confidence, why });
@@ -259,21 +348,26 @@ async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env),
   const effort = cfg.setEffort && allowed.effort ? toEffort(route.effort) : undefined;
 
   // The override rule: the judge's model always replaces what the caller or definition set.
-  const updated = { ...input, model };
-  if (effort) updated.effort = effort;
+  const applyMode = cfg.apply === 'input' ? 'input' : 'spawn';
+  let output = null, handoff;
+  if (applyMode === 'input') {
+    // Legacy: rewrite the tool call. Auto mode refuses a call a hook rewrote after its review.
+    const updated = { ...input, model };
+    if (effort) updated.effort = effort;
+    // No permissionDecision on purpose: the call goes through Claude Code's normal permission check.
+    output = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: updated } };
+  } else {
+    handoff = { model, ...(effort ? { effort } : {}), difficulty, confidence };
+  }
 
   return {
-    output: {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        // No permissionDecision on purpose: the call goes through Claude Code's normal permission check.
-        updatedInput: updated,
-      },
-    },
+    output,
+    handoff,
     log: {
       ...log, ...jlog,
       action: 'override',
       status: 'override',
+      apply: applyMode,
       model_after: model,
       effort_after: effort ?? log.effort_before,
       ...(cfg.setEffort && !allowed.effort ? { note: 'CLAUDE_CODE_EFFORT_LEVEL pins effort: effort left alone' } : {}),
