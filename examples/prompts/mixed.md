@@ -12,4 +12,4 @@ Write a Python function slugify(title: str) -> str that turns a title into a URL
 Without using any tools, design a concurrency-safe rate limiter for a distributed API gateway running on many nodes: compare token bucket, sliding window and GCRA, choose where state lives (Redis, gossip, local with sync), handle clock skew, node failure and hot keys, and explain the trade-offs between accuracy, latency and availability. Keep it under 400 words.
 ```
 
-<!-- judge-router: all three request sonnet; expected easy -> haiku/low, medium -> sonnet/medium, hard -> opus/high -->
+<!-- model-judge: all three request sonnet; expected easy -> haiku/low, medium -> sonnet/medium, hard -> opus/high -->

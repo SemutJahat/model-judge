@@ -1,5 +1,5 @@
 {
-  "description": "judge-router: pick each subagent's model and effort before it starts",
+  "description": "model-judge: pick each subagent's model and effort before it starts",
   "modules": [
     "./register.ts"
   ],

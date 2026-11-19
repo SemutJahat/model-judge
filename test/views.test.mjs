@@ -12,7 +12,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = join(HERE, '..', 'scripts');
 const dir = mkdtempSync(join(tmpdir(), 'jr-views-'));
 copyFileSync(join(HERE, 'fixtures', 'decisions.jsonl'), join(dir, 'decisions.jsonl'));
-const env = { PATH: process.env.PATH, HOME: process.env.HOME, JUDGE_ROUTER_DIR: dir, TZ: 'UTC' };
+const env = { PATH: process.env.PATH, HOME: process.env.HOME, MODEL_JUDGE_DIR: dir, TZ: 'UTC' };
 const run = (script, args = [], input = '') =>
   spawnSync(process.execPath, [join(SCRIPTS, script), ...args], { env, input, encoding: 'utf8' });
 
@@ -59,7 +59,7 @@ test('log.mjs: --session filter and --json', () => {
 });
 
 test('log.mjs: empty log says so', () => {
-  const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, JUDGE_ROUTER_DIR: mkdtempSync(join(tmpdir(), 'jr-empty-')) }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, MODEL_JUDGE_DIR: mkdtempSync(join(tmpdir(), 'jr-empty-')) }, encoding: 'utf8' });
   assert.match(r.stdout, /^no decisions yet in /);
 });
 
@@ -72,7 +72,7 @@ test('log.mjs: a spawn-mode decision is "override" once the module logged it app
     { ts: base.ts, event: 'applied', tool_use_id: 'a', agent_id: 'x', model: 'claude-haiku-5-5', effort: 'low' },
     { ...base, tool_use_id: 'b', description: 'pending one' },
   ].map((o) => JSON.stringify(o)).join('\n') + '\n');
-  const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, JUDGE_ROUTER_DIR: d }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [join(SCRIPTS, 'log.mjs')], { env: { ...env, MODEL_JUDGE_DIR: d }, encoding: 'utf8' });
   const rows = r.stdout.trim().split('\n');
   assert.match(rows[2], /applied one .* override$/);
   assert.match(rows[3], /pending one .* pending$/);
@@ -86,12 +86,12 @@ test('statusline-launcher: finds the installed copy from installed_plugins.json,
   mkdirSync(join(cfgDir, 'plugins'), { recursive: true });
   const root = join(HERE, '..');
   writeFileSync(join(cfgDir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
-    'judge-router@other': [{ scope: 'user', installPath: '/nonexistent' }],
-    'judge-router@claude-judge': [{ scope: 'project', installPath: '/nope' }, { scope: 'user', installPath: root }],
+    'model-judge@other': [{ scope: 'user', installPath: '/nonexistent' }],
+    'model-judge@claude-judge': [{ scope: 'project', installPath: '/nope' }, { scope: 'user', installPath: root }],
   } }));
   assert.equal(findRoot({ CLAUDE_CONFIG_DIR: cfgDir }), root);
   assert.equal(findRoot({ CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), 'jr-none-')) }), undefined);
-  assert.equal(findRoot({ JUDGE_ROUTER_ROOT: '/x' }), '/x');
+  assert.equal(findRoot({ MODEL_JUDGE_ROOT: '/x' }), '/x');
   const r = spawnSync(process.execPath, [join(SCRIPTS, 'statusline-launcher.mjs')],
     { env: { ...env, CLAUDE_CONFIG_DIR: cfgDir }, input: '{"session_id":"S2"}', encoding: 'utf8' });
   assert.equal(r.stdout, '⚖ opus/high · hard 0.85 · "rate limiter design"');

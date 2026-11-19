@@ -1,9 +1,9 @@
 ---
-description: Show judge-router's last subagent decisions (verdict, confidence, model, effort, judge time)
+description: Show model-judge's last subagent decisions (verdict, confidence, model, effort, judge time)
 argument-hint: "[N]"
 allowed-tools: Bash(node:*)
 ---
-judge-router's decisions log (latest last):
+model-judge's decisions log (latest last):
 
 !`node "${CLAUDE_PLUGIN_ROOT}/scripts/log.mjs" $ARGUMENTS`
 

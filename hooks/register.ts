@@ -1,4 +1,4 @@
-// judge-router's hooks module: applies the PreToolUse hook's decision without rewriting the tool call.
+// model-judge's hooks module: applies the PreToolUse hook's decision without rewriting the tool call.
 //
 // Why: auto mode reviews a tool call as the model wrote it. A PreToolUse hook that rewrites the call's input
 // (updatedInput) voids that review, and Claude Code refuses the call ("a hook changed this call's input after
@@ -39,7 +39,7 @@ export const register: Register = on => {
     await helper($, 'applied', { tool_use_id: e.tool_use_id, agentId: r.agentId, model: r.model, effort: d.effort, session_id: sessionId,
       ...(r.deny !== undefined ? { error: r.deny } : {}) })
     return r
-  // If anything above throws, start the subagent as asked: judge-router never blocks one.
+  // If anything above throws, start the subagent as asked: model-judge never blocks one.
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {

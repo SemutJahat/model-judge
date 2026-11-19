@@ -1,4 +1,4 @@
-# judge-router
+# model-judge
 
 A Claude Code plugin. Just before Claude Code starts a subagent, a small judge model rates the subagent's
 prompt **easy / medium / hard**. The plugin then sets the subagent's **model** and **effort** to match,
@@ -15,18 +15,18 @@ Two parts work together; both ship in `hooks/hooks.json`:
    `Task` its legacy alias), `scripts/route.mjs`. It sends the call's `prompt`, `description` and `subagent_type`
    to the judge, which answers `{"why", "difficulty", "confidence"}`, logs the decision, and shows you one line
    under the call. It **does not change the call**: no `updatedInput`, no `permissionDecision`. It leaves its
-   decision (model, effort) in `~/.claude/judge-router/pending/<tool_use_id>.json`.
+   decision (model, effort) in `~/.claude/model-judge/pending/<tool_use_id>.json`.
 2. **A hooks module**, `hooks/register.ts`, which Claude Code runs inside the session. At **`agent.spawn`**, when
    the call has passed every permission check and the subagent is about to start, it takes that decision and
    sets the subagent's **model**. On that subagent's **`turn.step`** (each model request it makes) it sets the
    **effort**. It runs `scripts/spawn.mjs` for the hand-off and logs what was really applied.
 
 Why two parts: auto mode reviews a tool call as the model wrote it, and **refuses a call that a hook rewrote
-after that review**. A `PreToolUse` hook that returned `updatedInput` (what judge-router 0.1 did) got every
+after that review**. A `PreToolUse` hook that returned `updatedInput` (what model-judge 0.1 did) got every
 changed subagent call refused in auto mode, and the model then sent each call a second time. Setting the model
 at spawn time leaves the reviewed call untouched. See [Auto mode](#auto-mode-why-the-call-is-not-rewritten).
 
-It also adds a `/judge-router:log` command and ships an optional status line. See
+It also adds a `/model-judge:log` command and ships an optional status line. See
 [Seeing what the judge does](#seeing-what-the-judge-does).
 
 Default routes (in `config.json`):
@@ -52,7 +52,7 @@ The subagent starts **as asked** (and the hook exits 0) when:
 - the judge takes longer than `timeoutMs` (default **15 s**); the judge is killed;
 - the subagent is a `fork`, since Claude Code ignores model and effort for forks;
 - `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is set, since Claude Code then removes `model` from the tool;
-- the hook runs inside the judge itself (`JUDGE_ROUTER_INNER=1`, the recursion guard).
+- the hook runs inside the judge itself (`MODEL_JUDGE_INNER=1`, the recursion guard).
 
 It never blocks a subagent: every path exits 0, the module's `agent.spawn` hook starts the subagent as asked
 if anything in it fails, and any error only leaves the call as it was.
@@ -60,11 +60,11 @@ if anything in it fails, and any error only leaves the call as it was.
 The same call judged again within `cacheTtlMs` (default 10 minutes) reuses the verdict instead of paying the
 judge again: the log says `"judge": "cache"`, and the line shows `(0.0s)`. The cache key covers the judge's
 model, its instructions and the task text (prompt, description, subagent type), and failed calls are not
-cached. It lives in `~/.claude/judge-router/cache.json`.
+cached. It lives in `~/.claude/model-judge/cache.json`.
 
 ## Auto mode: why the call is not rewritten
 
-What judge-router 0.1 did, and what happened in auto mode (reproduced in a headless `claude -p --permission-mode
+What model-judge 0.1 did, and what happened in auto mode (reproduced in a headless `claude -p --permission-mode
 auto` run of `examples/prompts/mixed.md`): all three Agent calls came back with
 
 > The server-side auto mode classifier gave no verdict for Agent: a hook changed this call's input after auto
@@ -81,7 +81,7 @@ This is by design in Claude Code 2.1.328. Auto mode's classifier reviews each to
 model wrote it, so any `updatedInput` voids the review. A `permissionDecision` of `"allow"` with
 `updatedInput` doesn't help: in auto mode a hook's allow is still sent to the classifier ("auto mode requires
 classifier adjudication"), which has only seen the original input. And an `"allow"` would skip the user's
-permission prompts in the other modes, which judge-router must not do.
+permission prompts in the other modes, which model-judge must not do.
 
 The fix uses the hooks-module events that Claude Code 2.1.328 gives plugins for this:
 - **`agent.spawn`:** "A hook sets this to pick the subagent's model". It runs after the call was reviewed
@@ -120,7 +120,7 @@ Limits found in Claude Code:
 - Since the call isn't rewritten, a subagent's `meta.json` in the transcript shows the model but no effort
   (`effort: null`). The `"request"` lines in the log show the effort that was sent.
 - **`CLAUDE_CODE_EFFORT_LEVEL`** pins the session's effort. When it is set (to anything but `auto`/`unset`),
-  judge-router sets only the model and leaves effort alone (the log notes it).
+  model-judge sets only the model and leaves effort alone (the log notes it).
 - The module's effort table lives in its memory: if Claude Code reloads the plugin while a subagent runs,
   that subagent's later requests go back to their default effort, but its model stays.
 - Forks inherit the parent's model and effort, and the hook doesn't touch them.
@@ -151,10 +151,10 @@ started four subagents, all requesting `sonnet`:
    ├ Agent (slugify with tests)
    ├ Agent (rate limiter design)
    └ Explore (vague task)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "count words" → easy 0.97 · sonnet→haiku · effort low (3.4s)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "slugify with tests" → medium 0.85 · sonnet→sonnet · effort medium (2.7s)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "rate limiter design" → hard 0.85 · sonnet→opus · effort high (4.3s)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "vague task" unsure 0.40 (easy?) → left as sonnet (3.5s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "count words" → easy 0.97 · sonnet→haiku · effort low (3.4s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "slugify with tests" → medium 0.85 · sonnet→sonnet · effort medium (2.7s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "rate limiter design" → hard 0.85 · sonnet→opus · effort high (4.3s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "vague task" unsure 0.40 (easy?) → left as sonnet (3.5s)
 ```
 
 The subagents' transcripts confirm it: `count words` ran on `claude-haiku-5-5` (effort low), `slugify with tests`
@@ -162,16 +162,16 @@ on `claude-sonnet-5-5` (medium), `rate limiter design` on `claude-opus-5-5` (hig
 `claude-sonnet-5-5` with no effort set.
 
 In **auto mode**, with the plugin installed (`claude --permission-mode auto --model sonnet`, the mixed prompt),
-the capture shows one launch, no refusals, and judge-router's status line at the bottom:
+the capture shows one launch, no refusals, and model-judge's status line at the bottom:
 
 ```
 ⏺ 3 background agents launched (↓ to manage)
    ├ count words
    ├ slugify with tests
    └ distributed rate limiter
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "count words" → easy 0.97 · sonnet→haiku · effort low (3.1s)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "slugify with tests" → medium 0.90 · sonnet→sonnet · effort medium (4.0s)
-  ⎿  PreToolUse:Agent says: ⚖ judge-router: "distributed rate limiter" → hard 0.90 · sonnet→opus · effort high (3.0s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "count words" → easy 0.97 · sonnet→haiku · effort low (3.1s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "slugify with tests" → medium 0.90 · sonnet→sonnet · effort medium (4.0s)
+  ⎿  PreToolUse:Agent says: ⚖ model-judge: "distributed rate limiter" → hard 0.90 · sonnet→opus · effort high (3.0s)
 …
 ⏺ Agent "distributed rate limiter" finished · 24s
 ──────────────────────────────────────────────
@@ -184,8 +184,8 @@ the capture shows one launch, no refusals, and judge-router's status line at the
 The other forms of the line:
 
 ```
-⚖ judge-router: "x" judge failed (cli: claude -p timed out after 15000 ms) → left as sonnet (15.0s)
-⚖ judge-router: "x" skipped (fork) → left as default
+⚖ model-judge: "x" judge failed (cli: claude -p timed out after 15000 ms) → left as sonnet (15.0s)
+⚖ model-judge: "x" skipped (fork) → left as default
 ```
 
 `"display"` in `config.json` sets how much it says:
@@ -195,14 +195,14 @@ The other forms of the line:
 
 When the input is left unchanged, the hook prints only `{"systemMessage": …}`, with no `hookSpecificOutput`.
 
-### 2. `/judge-router:log [N]`, and the same in a terminal
+### 2. `/model-judge:log [N]`, and the same in a terminal
 
-The plugin adds a slash command, `/judge-router:log`. It runs `scripts/log.mjs` and shows the last N decisions,
+The plugin adds a slash command, `/model-judge:log`. It runs `scripts/log.mjs` and shows the last N decisions,
 10 by default. It runs `node` only, which its `allowed-tools` frontmatter permits, so it asks for no permission.
 Captured from the interactive session:
 
 ```
-❯ /judge-router:log
+❯ /model-judge:log
 ⏺ time      subagent                      verdict  conf  model              effort         judge   result
   ────────  ────────────────────────────  ───────  ────  ─────────────────  ─────────────  ──────  ─────────
   22:44:07  count words                   easy     0.97  sonnet→haiku       -→low          3.4s    override
@@ -237,28 +237,28 @@ the session's first subagent. Captured at the bottom of the interactive session 
 The other forms: `⚖ sonnet (unsure 0.40) · "vague task"`, `⚖ default (judge failed)`. Nothing sets this up
 for you. A status line is a command in `~/.claude/settings.json`, and an installed plugin's folder changes with
 each version, so point it at the stable launcher instead. `scripts/statusline-launcher.mjs` finds the installed
-judge-router (its `installPath` in `~/.claude/plugins/installed_plugins.json`) and runs that version's
+model-judge (its `installPath` in `~/.claude/plugins/installed_plugins.json`) and runs that version's
 `statusline.mjs`. To opt in, copy the launcher out of the plugin once:
 
 ```sh
-mkdir -p ~/.claude/judge-router
-cp "$(jq -r '.plugins["judge-router@claude-judge"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/statusline-launcher.mjs" \
-   ~/.claude/judge-router/statusline.mjs
+mkdir -p ~/.claude/model-judge
+cp "$(jq -r '.plugins["model-judge@claude-judge"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/statusline-launcher.mjs" \
+   ~/.claude/model-judge/statusline.mjs
 ```
 
 Then add this to `~/.claude/settings.json`, with your home folder in the path:
 
 ```json
-"statusLine": { "type": "command", "command": "node /Users/YOU/.claude/judge-router/statusline.mjs" }
+"statusLine": { "type": "command", "command": "node /Users/YOU/.claude/model-judge/statusline.mjs" }
 ```
 
 To try it for one session without editing any settings file:
-`claude --settings '{"statusLine":{"type":"command","command":"node /Users/YOU/.claude/judge-router/statusline.mjs"}}'`.
+`claude --settings '{"statusLine":{"type":"command","command":"node /Users/YOU/.claude/model-judge/statusline.mjs"}}'`.
 If you already have a status line, call both from one command, and pass the same stdin to each:
 `sh -c 'i=$(cat); printf %s "$i" | your-statusline; printf " "; printf %s "$i" | node …/statusline.mjs'`.
 
 To remove it, delete the `"statusLine"` entry from `~/.claude/settings.json` (and, if you like,
-`~/.claude/judge-router/statusline.mjs`). New sessions then show no status line.
+`~/.claude/model-judge/statusline.mjs`). New sessions then show no status line.
 
 ## Try it yourself
 
@@ -305,16 +305,16 @@ node examples/dry-run.mjs --json --file examples/prompts/hard.md            # th
 It runs the same `decide()` as the hook, with the same config, judge and threshold. It prints the verdict and the
 model and effort it would set, and writes nothing to the log unless you pass `--log`.
 
-**Watching while you try.** In an interactive session, each subagent call shows its judge-router line (see
-[Seeing what the judge does](#seeing-what-the-judge-does)). Type `/judge-router:log` for the table, or keep
+**Watching while you try.** In an interactive session, each subagent call shows its model-judge line (see
+[Seeing what the judge does](#seeing-what-the-judge-does)). Type `/model-judge:log` for the table, or keep
 `node scripts/log.mjs --watch` running in a second terminal.
 
 **Reading the log.** Every subagent the hook sees in a normal session adds a line to
-`~/.claude/judge-router/decisions.jsonl` (the demo writes to its temp folder instead). Use `node scripts/log.mjs`
+`~/.claude/model-judge/decisions.jsonl` (the demo writes to its temp folder instead). Use `node scripts/log.mjs`
 for a table, or `jq` for the raw lines:
 
 ```sh
-jq -c '{ts, description, difficulty, confidence, model: "\(.model_before) -> \(.model_after)", effort_after, action, reason}' ~/.claude/judge-router/decisions.jsonl | tail
+jq -c '{ts, description, difficulty, confidence, model: "\(.model_before) -> \(.model_after)", effort_after, action, reason}' ~/.claude/model-judge/decisions.jsonl | tail
 ```
 
 **Seeing the real model in a subagent's transcript.** Claude Code keeps each subagent's transcript next to the
@@ -332,33 +332,33 @@ for the subagent (matched by `agent_id`) shows the effort its first request carr
 
 ## Install / uninstall
 
-The repo is its own marketplace, named `claude-judge`. To install judge-router for your user (all your Claude
+The repo is its own marketplace, named `claude-judge`. To install model-judge for your user (all your Claude
 Code sessions), from a terminal:
 
 ```sh
 claude plugin marketplace add SemutJahat/claude-judge
-claude plugin install judge-router@claude-judge --scope user
-claude plugin list                     # judge-router@claude-judge … Scope: user · Status: ✔ enabled
+claude plugin install model-judge@claude-judge --scope user
+claude plugin list                     # model-judge@claude-judge … Scope: user · Status: ✔ enabled
 ```
 
-Or at the Claude Code prompt: `/plugin install judge-router --marketplace SemutJahat/claude-judge`.
+Or at the Claude Code prompt: `/plugin install model-judge --marketplace SemutJahat/claude-judge`.
 New sessions load the plugin; sessions that are already open don't. It needs Claude Code with hook modules
 (2.1.328 has them; see [Older Claude Code](#auto-mode-why-the-call-is-not-rewritten)), Node on the PATH, and
 your Claude Code login, which the judge uses.
 
-Claude Code installs a copy of the plugin in `~/.claude/plugins/cache/claude-judge/judge-router/<version>/`
+Claude Code installs a copy of the plugin in `~/.claude/plugins/cache/claude-judge/model-judge/<version>/`
 and runs it from there. To get a newer version after the repo changes:
 
 ```sh
 claude plugin marketplace update claude-judge     # fetch the repo's latest marketplace and plugin
-claude plugin update judge-router@claude-judge    # then open a new session
+claude plugin update model-judge@claude-judge    # then open a new session
 ```
 
 To turn it off for a while, or remove it:
 
 ```sh
-claude plugin disable judge-router@claude-judge --scope user    # off; on again: claude plugin enable judge-router@claude-judge --scope user
-claude plugin uninstall judge-router@claude-judge --scope user  # remove the plugin
+claude plugin disable model-judge@claude-judge --scope user    # off; on again: claude plugin enable model-judge@claude-judge --scope user
+claude plugin uninstall model-judge@claude-judge --scope user  # remove the plugin
 claude plugin marketplace remove claude-judge                   # remove the marketplace
 ```
 
@@ -389,20 +389,20 @@ the next subagent call, and `hooks/` and `commands/` from the next new session.
 ```
 
 An installed plugin is a copy that each update replaces, so put your own settings in
-`~/.claude/judge-router/config.json`, which only needs the keys you change (e.g. `{"display": "changes"}`).
-Settings are read from the plugin's `config.json`, then `~/.claude/judge-router/config.json`, then the file
-in `$JUDGE_ROUTER_CONFIG`. Later files win, key by key, and `routes` merge by level. Route models can be
-aliases (`haiku`, `sonnet`, `opus`, `fable`) or full ids (`claude-opus-5-5` → `opus`). `JUDGE_ROUTER_CLAUDE_BIN`
+`~/.claude/model-judge/config.json`, which only needs the keys you change (e.g. `{"display": "changes"}`).
+Settings are read from the plugin's `config.json`, then `~/.claude/model-judge/config.json`, then the file
+in `$MODEL_JUDGE_CONFIG`. Later files win, key by key, and `routes` merge by level. Route models can be
+aliases (`haiku`, `sonnet`, `opus`, `fable`) or full ids (`claude-opus-5-5` → `opus`). `MODEL_JUDGE_CLAUDE_BIN`
 names another `claude` binary.
 
 How the judge is called: `claude -p --model haiku --tools "" --strict-mcp-config --setting-sources ""
 --no-session-persistence --disable-slash-commands --output-format json --system-prompt …`. It runs in a fresh
-empty temp folder (removed afterwards) with `JUDGE_ROUTER_INNER=1` in its environment. Loading no settings
+empty temp folder (removed afterwards) with `MODEL_JUDGE_INNER=1` in its environment. Loading no settings
 files means it loads no plugins, so this hook can't run again inside it, and the env guard covers the rest.
 
 ## The log
 
-Every decision is one JSON line in **`~/.claude/judge-router/decisions.jsonl`** (or in `$JUDGE_ROUTER_DIR`):
+Every decision is one JSON line in **`~/.claude/model-judge/decisions.jsonl`** (or in `$MODEL_JUDGE_DIR`):
 
 ```json
 {"ts":"2026-11-19T11:46:17.930Z","session_id":"e370a8ce-…","tool_use_id":"toolu_016V…","tool":"Agent",
@@ -429,7 +429,7 @@ what its first model request really carried. A decision with no `applied` line s
 `log.mjs`, meaning the module didn't apply it (for example, because hook modules aren't available).
 
 ```sh
-tail -f ~/.claude/judge-router/decisions.jsonl | jq -c '{description, difficulty, confidence, model_before, model_after, effort_after, why}'
+tail -f ~/.claude/model-judge/decisions.jsonl | jq -c '{description, difficulty, confidence, model_before, model_after, effort_after, why}'
 ```
 
 ## Tests

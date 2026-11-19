@@ -1,7 +1,6 @@
 node_modules/
 .DS_Store
-# never publish: local archives, logs and run captures
-*.zip
+# never publish: logs and run captures
 *.log
 decisions.jsonl
 !test/fixtures/decisions.jsonl

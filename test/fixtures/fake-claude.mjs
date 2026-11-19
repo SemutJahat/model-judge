@@ -9,7 +9,7 @@ for await (const c of process.stdin) prompt += c;
 const args = process.argv.slice(2);
 if (process.env.FAKE_CLAUDE_RECORD) {
   appendFileSync(process.env.FAKE_CLAUDE_RECORD, JSON.stringify({
-    args, cwd: process.cwd(), inner: process.env.JUDGE_ROUTER_INNER ?? null, prompt,
+    args, cwd: process.cwd(), inner: process.env.MODEL_JUDGE_INNER ?? null, prompt,
   }) + '\n');
 }
 const reply = (result) => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result }));

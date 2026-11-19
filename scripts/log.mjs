@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// judge-router's decisions as a compact table.
+// model-judge's decisions as a compact table.
 //   node scripts/log.mjs              the last 10 decisions
 //   node scripts/log.mjs 25           the last 25 (also -n 25)
 //   node scripts/log.mjs --watch      the last 10, then each new decision as it happens (Ctrl-C to stop)
 //   node scripts/log.mjs --session ID only that session's    --json  the raw log lines
-// Reads ~/.claude/judge-router/decisions.jsonl (or $JUDGE_ROUTER_DIR/decisions.jsonl).
+// Reads ~/.claude/model-judge/decisions.jsonl (or $MODEL_JUDGE_DIR/decisions.jsonl).
 import { existsSync, readFileSync, statSync, openSync, readSync, closeSync, watchFile } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from './lib.mjs';

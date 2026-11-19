@@ -1,4 +1,4 @@
-// judge-router: the logic of the PreToolUse hook, kept free of process I/O so tests can drive it.
+// model-judge: the logic of the PreToolUse hook, kept free of process I/O so tests can drive it.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, appendFileSync, existsSync, writeFileSync, renameSync, readdirSync, statSync } from 'node:fs';
@@ -34,15 +34,15 @@ export const DEFAULT_CONFIG = {
 };
 
 export function dataDir(env = process.env) {
-  return env.JUDGE_ROUTER_DIR || join(homedir(), '.claude', 'judge-router');
+  return env.MODEL_JUDGE_DIR || join(homedir(), '.claude', 'model-judge');
 }
 
-// Config: the plugin's config.json, then ~/.claude/judge-router/config.json (survives reinstalls),
-// then the file named by JUDGE_ROUTER_CONFIG. Later ones win, key by key (routes merged per level).
+// Config: the plugin's config.json, then ~/.claude/model-judge/config.json (survives reinstalls),
+// then the file named by MODEL_JUDGE_CONFIG. Later ones win, key by key (routes merged per level).
 export function loadConfig(env = process.env) {
   let cfg = structuredClone(DEFAULT_CONFIG);
   const files = [join(PLUGIN_ROOT, 'config.json'), join(dataDir(env), 'config.json')];
-  if (env.JUDGE_ROUTER_CONFIG) files.push(env.JUDGE_ROUTER_CONFIG);
+  if (env.MODEL_JUDGE_CONFIG) files.push(env.MODEL_JUDGE_CONFIG);
   for (const f of files) {
     if (!existsSync(f)) continue;
     try {
@@ -50,7 +50,7 @@ export function loadConfig(env = process.env) {
       cfg = { ...cfg, ...c, routes: { ...cfg.routes, ...(c.routes || {}) } };
     } catch { /* a broken config file is ignored, never fatal */ }
   }
-  if (env.JUDGE_ROUTER_CLAUDE_BIN) cfg.claudeBin = env.JUDGE_ROUTER_CLAUDE_BIN;
+  if (env.MODEL_JUDGE_CLAUDE_BIN) cfg.claudeBin = env.MODEL_JUDGE_CLAUDE_BIN;
   return cfg;
 }
 
@@ -133,7 +133,7 @@ async function judgeViaApi(userPrompt, cfg, env, timeoutMs) {
 }
 
 // `claude -p` on the user's own login: no tools, no MCP, no settings (so no plugins, so not this hook),
-// no session saved, in an empty temp folder (a neutral name: the model sees its working folder), with JUDGE_ROUTER_INNER=1 as a second guard against recursion.
+// no session saved, in an empty temp folder (a neutral name: the model sees its working folder), with MODEL_JUDGE_INNER=1 as a second guard against recursion.
 export function judgeViaCli(userPrompt, cfg, env, timeoutMs) {
   return new Promise((resolve, reject) => {
     const cwd = mkdtempSync(join(tmpdir(), 'task-'));
@@ -146,7 +146,7 @@ export function judgeViaCli(userPrompt, cfg, env, timeoutMs) {
     let out = '', err = '', done = false;
     const child = spawn(cfg.claudeBin, args, {
       cwd,
-      env: { ...env, JUDGE_ROUTER_INNER: '1' },
+      env: { ...env, MODEL_JUDGE_INNER: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const finish = (fn, val) => {
@@ -327,7 +327,7 @@ async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env),
     log: { ...log, ...extra, action: 'unchanged', status, reason, model_after: log.model_before, effort_after: log.effort_before },
   });
 
-  if (env.JUDGE_ROUTER_INNER === '1') return unchanged('inside the judge itself (recursion guard)', {}, 'guard');
+  if (env.MODEL_JUDGE_INNER === '1') return unchanged('inside the judge itself (recursion guard)', {}, 'guard');
   if (!SUBAGENT_TOOLS.has(tool) || !input || typeof input !== 'object') return unchanged(`not a subagent tool: ${tool}`, {}, 'not-agent');
   if (typeof input.prompt !== 'string' || !input.prompt.trim()) return unchanged('subagent has no prompt');
   if (input.subagent_type === 'fork') return unchanged('fork: Claude Code ignores model and effort for forks');
@@ -391,17 +391,17 @@ export function formatMessage(log, cfg = DEFAULT_CONFIG) {
     const changed = log.model_after !== log.model_before || log.effort_after !== log.effort_before;
     if (mode === 'changes' && !changed) return undefined;
     const effort = log.effort_after ? ` · effort ${log.effort_after}` : '';
-    return `⚖ judge-router: ${name} → ${log.difficulty} ${conf} · ${before}→${log.model_after}${effort}${secs}`;
+    return `⚖ model-judge: ${name} → ${log.difficulty} ${conf} · ${before}→${log.model_after}${effort}${secs}`;
   }
   if (log.status === 'unsure') {
     if (mode === 'changes') return undefined;
-    return `⚖ judge-router: ${name} unsure ${conf} (${log.difficulty}?) → left as ${before}${secs}`;
+    return `⚖ model-judge: ${name} unsure ${conf} (${log.difficulty}?) → left as ${before}${secs}`;
   }
   if (log.status === 'failed') {
-    return `⚖ judge-router: ${name} judge failed (${clip(String(log.reason).replace(/^judge failed: /, ''), 80)}) → left as ${before}${secs}`;
+    return `⚖ model-judge: ${name} judge failed (${clip(String(log.reason).replace(/^judge failed: /, ''), 80)}) → left as ${before}${secs}`;
   }
   if (mode === 'changes') return undefined;
-  return `⚖ judge-router: ${name} skipped (${clip(String(log.reason).split(':')[0], 60)}) → left as ${before}`;
+  return `⚖ model-judge: ${name} skipped (${clip(String(log.reason).split(':')[0], 60)}) → left as ${before}`;
 }
 
 function clip(s, n) {

@@ -4,4 +4,4 @@ Start one subagent with the Agent tool: subagent_type "general-purpose", descrip
 Without using any tools, design a concurrency-safe rate limiter for a distributed API gateway running on many nodes: compare token bucket, sliding window and GCRA, choose where state lives (Redis, gossip, local with sync), handle clock skew, node failure and hot keys, and explain the trade-offs between accuracy, latency and availability. Keep it under 400 words.
 ```
 
-<!-- judge-router: expected hard: sonnet -> opus, effort high -->
+<!-- model-judge: expected hard: sonnet -> opus, effort high -->

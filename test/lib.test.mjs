@@ -74,20 +74,20 @@ const fm = (log, display) => formatMessage({ ...base, ...log }, { ...DEFAULT_CON
 
 test('formatMessage: override', () => {
   assert.equal(fm({ status: 'override', difficulty: 'medium', confidence: 0.9, model_after: 'sonnet', effort_after: 'medium' }),
-    '⚖ judge-router: "slugify with tests" → medium 0.90 · sonnet→sonnet · effort medium (3.4s)');
+    '⚖ model-judge: "slugify with tests" → medium 0.90 · sonnet→sonnet · effort medium (3.4s)');
   assert.equal(fm({ status: 'override', difficulty: 'easy', confidence: 1, model_before: null, model_after: 'haiku', effort_after: 'low', judge_ms: 2950 }),
-    '⚖ judge-router: "slugify with tests" → easy 1.00 · default→haiku · effort low (3.0s)');
+    '⚖ model-judge: "slugify with tests" → easy 1.00 · default→haiku · effort low (3.0s)');
   assert.equal(fm({ status: 'override', difficulty: 'hard', confidence: 0.8, model_after: 'opus', effort_after: null }),
-    '⚖ judge-router: "slugify with tests" → hard 0.80 · sonnet→opus (3.4s)');
+    '⚖ model-judge: "slugify with tests" → hard 0.80 · sonnet→opus (3.4s)');
 });
 
 test('formatMessage: unsure, failed, skipped', () => {
   assert.equal(fm({ description: 'vague task', status: 'unsure', difficulty: 'easy', confidence: 0.35 }),
-    '⚖ judge-router: "vague task" unsure 0.35 (easy?) → left as sonnet (3.4s)');
+    '⚖ model-judge: "vague task" unsure 0.35 (easy?) → left as sonnet (3.4s)');
   assert.equal(fm({ status: 'failed', reason: 'judge failed: cli: claude -p timed out after 15000 ms', judge_ms: 15003 }),
-    '⚖ judge-router: "slugify with tests" judge failed (cli: claude -p timed out after 15000 ms) → left as sonnet (15.0s)');
+    '⚖ model-judge: "slugify with tests" judge failed (cli: claude -p timed out after 15000 ms) → left as sonnet (15.0s)');
   assert.equal(fm({ status: 'skipped', reason: 'fork: Claude Code ignores model and effort for forks', judge_ms: undefined, model_before: null }),
-    '⚖ judge-router: "slugify with tests" skipped (fork) → left as default');
+    '⚖ model-judge: "slugify with tests" skipped (fork) → left as default');
 });
 
 test('formatMessage: guard and other tools say nothing; long names are clipped', () => {
@@ -109,7 +109,7 @@ test('formatMessage: display modes', () => {
 });
 
 test('askJudgeCached: hit within TTL, miss after it, key covers model, instructions and task', async () => {
-  const env = { JUDGE_ROUTER_DIR: mkdtempSync(join(tmpdir(), 'jr-cache-')) };
+  const env = { MODEL_JUDGE_DIR: mkdtempSync(join(tmpdir(), 'jr-cache-')) };
   let calls = 0, t = 1000;
   const judge = async () => (calls++, { verdict: { difficulty: 'easy', confidence: 0.9, why: '' }, judge: 'cli', ms: 3000 });
   const cfg = { ...DEFAULT_CONFIG, cacheTtlMs: 60000 };

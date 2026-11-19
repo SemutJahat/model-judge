@@ -4,4 +4,4 @@ Start one subagent with the Agent tool: subagent_type "general-purpose", descrip
 Look into it and do what's needed.
 ```
 
-<!-- judge-router: expected unsure (confidence < 0.75): left unchanged, stays sonnet with no effort set -->
+<!-- model-judge: expected unsure (confidence < 0.75): left unchanged, stays sonnet with no effort set -->

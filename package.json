@@ -1,6 +1,6 @@
 {
-  "name": "judge-router",
-  "version": "0.2.0",
+  "name": "model-judge",
+  "version": "0.3.0",
   "private": true,
   "description": "Claude Code plugin: a small judge model picks each subagent's model and effort.",
   "type": "module",

@@ -4,4 +4,4 @@ Start one subagent with the Agent tool: subagent_type "general-purpose", descrip
 Write a Python function slugify(title: str) -> str that turns a title into a URL slug: lowercase, ASCII only (strip accents), words joined by single hyphens, no leading or trailing hyphens, and an empty result for input with no letters or digits. Handle edge cases (unicode, repeated separators, emoji, empty string) and include pytest tests for them. Do not use any tools: reply with the code only.
 ```
 
-<!-- judge-router: expected medium: sonnet -> sonnet, effort medium -->
+<!-- model-judge: expected medium: sonnet -> sonnet, effort medium -->

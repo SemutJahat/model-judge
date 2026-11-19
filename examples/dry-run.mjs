@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Ask only the judge, no subagent started: prints the verdict and the model/effort judge-router would set.
+// Ask only the judge, no subagent started: prints the verdict and the model/effort model-judge would set.
 //
 //   node examples/dry-run.mjs "Count the words in: the quick brown fox"
 //   echo "Design a distributed rate limiter" | node examples/dry-run.mjs

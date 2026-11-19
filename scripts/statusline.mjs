@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Status line: judge-router's last decision in this session, e.g.  ⚖ opus/high · hard 0.85 · "rate limiter"
+// Status line: model-judge's last decision in this session, e.g.  ⚖ opus/high · hard 0.85 · "rate limiter"
 // Opt in with one line in a settings file (see README):
-//   "statusLine": { "type": "command", "command": "node /path/to/judge-router/scripts/statusline.mjs" }
+//   "statusLine": { "type": "command", "command": "node /path/to/model-judge/scripts/statusline.mjs" }
 // Claude Code passes the session as JSON on stdin; prints nothing until the session's first subagent.
-// JUDGE_ROUTER_STATUS_PREFIX / _SUFFIX wrap it, so it can sit next to an existing status line.
+// MODEL_JUDGE_STATUS_PREFIX / _SUFFIX wrap it, so it can sit next to an existing status line.
 import { existsSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from './lib.mjs';
@@ -44,5 +44,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   try { sessionId = JSON.parse(input).session_id; } catch {}
   let text = '';
   try { text = statusText(lastDecision(join(dataDir(), 'decisions.jsonl'), sessionId)); } catch {}
-  if (text) process.stdout.write(`${process.env.JUDGE_ROUTER_STATUS_PREFIX ?? ''}${text}${process.env.JUDGE_ROUTER_STATUS_SUFFIX ?? ''}`);
+  if (text) process.stdout.write(`${process.env.MODEL_JUDGE_STATUS_PREFIX ?? ''}${text}${process.env.MODEL_JUDGE_STATUS_SUFFIX ?? ''}`);
 }

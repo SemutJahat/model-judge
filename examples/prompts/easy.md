@@ -4,4 +4,4 @@ Start one subagent with the Agent tool: subagent_type "general-purpose", descrip
 Count the words in this sentence and reply with just the number: "The quick brown fox jumps over the lazy dog." Do not use any tools.
 ```
 
-<!-- judge-router: expected easy: sonnet -> haiku, effort low -->
+<!-- model-judge: expected easy: sonnet -> haiku, effort low -->

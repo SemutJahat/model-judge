@@ -22,8 +22,8 @@ function baseEnv(extra = {}) {
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      JUDGE_ROUTER_DIR: dir,
-      JUDGE_ROUTER_CLAUDE_BIN: FAKE,
+      MODEL_JUDGE_DIR: dir,
+      MODEL_JUDGE_CLAUDE_BIN: FAKE,
       FAKE_CLAUDE_RECORD: join(dir, 'calls.jsonl'),
       ...extra,
     },
@@ -39,7 +39,7 @@ function runHookAsync(stdin, env) {
       let stdout = '', stderr = '';
       c.stdout.on('data', (d) => { stdout += d; });
       c.stderr.on('data', (d) => { stderr += d; });
-      c.on('close', (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0, dir: env.JUDGE_ROUTER_DIR }));
+      c.on('close', (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0, dir: env.MODEL_JUDGE_DIR }));
       c.stdin.end(stdin);
     });
   });
@@ -48,7 +48,7 @@ function runHookAsync(stdin, env) {
 function runHook(stdin, env) {
   const t0 = Date.now();
   const r = spawnSync(process.execPath, [ROUTE], { input: stdin, env, encoding: 'utf8', timeout: 30000 });
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0, dir: env.JUDGE_ROUTER_DIR };
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0, dir: env.MODEL_JUDGE_DIR };
 }
 
 function lastLog(dir) {
@@ -91,7 +91,7 @@ test('easy prompt -> haiku + low effort, rest of the input kept', () => {
   assert.equal(u.model, 'haiku');
   assert.equal(u.effort, 'low');
   assert.equal(u.difficulty, 'easy');
-  assert.equal(JSON.parse(r.stdout).systemMessage.startsWith('⚖ judge-router: "find a constant" → easy'), true);
+  assert.equal(JSON.parse(r.stdout).systemMessage.startsWith('⚖ model-judge: "find a constant" → easy'), true);
   const log = lastLog(dir);
   assert.equal(log.action, 'override');
   assert.equal(log.model_before, null);
@@ -107,7 +107,7 @@ test('easy prompt -> haiku + low effort, rest of the input kept', () => {
 test('override shows the user one line: verdict, model before -> after, effort, judge time', () => {
   const { env } = baseEnv();
   const o = JSON.parse(runHook(fixture('model-set-opus'), env).stdout);
-  assert.match(o.systemMessage, /^⚖ judge-router: "trivial but opus requested" → easy 0\.97 · opus→haiku · effort low \(\d+\.\ds\)$/);
+  assert.match(o.systemMessage, /^⚖ model-judge: "trivial but opus requested" → easy 0\.97 · opus→haiku · effort low \(\d+\.\ds\)$/);
   assert.equal(o.hookSpecificOutput, undefined);
 });
 
@@ -115,10 +115,10 @@ test('display "off": no message, routing unchanged', () => {
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ display: 'off' }));
-  const r = runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
+  const r = runHook(fixture('easy'), { ...env, MODEL_JUDGE_CONFIG: cfg });
   assert.equal(r.stdout, '');
   assert.equal(updated(r).model, 'haiku');
-  assert.equal(runHook(fixture('unsure'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout, '');
+  assert.equal(runHook(fixture('unsure'), { ...env, MODEL_JUDGE_CONFIG: cfg }).stdout, '');
 });
 
 test('hard prompt -> opus + high effort', () => {
@@ -174,8 +174,8 @@ test('judge called as claude -p with no tools/MCP/settings, in an empty temp dir
   assert.match(call.prompt, /Description: find a constant/);
 });
 
-test('inside the judge (JUDGE_ROUTER_INNER=1): no-op, no judge call', () => {
-  const { dir, env } = baseEnv({ JUDGE_ROUTER_INNER: '1' });
+test('inside the judge (MODEL_JUDGE_INNER=1): no-op, no judge call', () => {
+  const { dir, env } = baseEnv({ MODEL_JUDGE_INNER: '1' });
   const r = runHook(fixture('easy'), env);
   assert.equal(r.status, 0);
   assert.equal(r.stdout, '');
@@ -183,10 +183,10 @@ test('inside the judge (JUDGE_ROUTER_INNER=1): no-op, no judge call', () => {
 });
 
 test('judge missing (claude not found): unchanged, exit 0, logged', () => {
-  const { dir, env } = baseEnv({ JUDGE_ROUTER_CLAUDE_BIN: '/nonexistent/claude' });
+  const { dir, env } = baseEnv({ MODEL_JUDGE_CLAUDE_BIN: '/nonexistent/claude' });
   const r = runHook(fixture('model-set-opus'), env);
   assert.equal(r.status, 0);
-  messageOnly(r.stdout, /judge-router: "trivial but opus requested" judge failed \(cli: .*ENOENT.*\) → left as opus/);
+  messageOnly(r.stdout, /model-judge: "trivial but opus requested" judge failed \(cli: .*ENOENT.*\) → left as opus/);
   const log = lastLog(dir);
   assert.equal(log.action, 'unchanged');
   assert.match(log.reason, /judge failed: cli: .*ENOENT/);
@@ -211,7 +211,7 @@ test('judge answering without JSON: unchanged', () => {
 test('judge unsure (confidence 0.4 < 0.75): unchanged, verdict still logged', () => {
   const { dir, env } = baseEnv();
   const r = runHook(fixture('unsure'), env);
-  messageOnly(r.stdout, /^⚖ judge-router: "vague task" unsure 0\.40 \(medium\?\) → left as default \(\d+\.\ds\)$/);
+  messageOnly(r.stdout, /^⚖ model-judge: "vague task" unsure 0\.40 \(medium\?\) → left as default \(\d+\.\ds\)$/);
   const log = lastLog(dir);
   assert.equal(log.action, 'unchanged');
   assert.equal(log.confidence, 0.4);
@@ -222,7 +222,7 @@ test('judge too slow: unchanged after the timeout, exit 0', () => {
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ timeoutMs: 1500 }));
-  const r = runHook(fixture('judge-slow'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
+  const r = runHook(fixture('judge-slow'), { ...env, MODEL_JUDGE_CONFIG: cfg });
   assert.equal(r.status, 0);
   messageOnly(r.stdout, /judge failed \(cli: claude -p timed out after \d+ ms\)/);
   assert.ok(r.ms < 4500, `took ${r.ms} ms`);
@@ -264,7 +264,7 @@ test('config file changes the mapping and the judge model', () => {
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ judgeModel: 'sonnet', routes: { easy: { model: 'claude-sonnet-5-5', effort: 'medium' } } }));
-  const u = updated(runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg }));
+  const u = updated(runHook(fixture('easy'), { ...env, MODEL_JUDGE_CONFIG: cfg }));
   assert.equal(u.model, 'sonnet');
   assert.equal(u.effort, 'medium');
   const a = JSON.parse(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim()).args;
@@ -319,7 +319,7 @@ test('API failing: falls back to claude -p', async () => {
 // ---- apply modes, hand-off, cache ----
 
 test('unchanged calls hand nothing off (unsure, judge failed, fork)', () => {
-  for (const [name, extra] of [['unsure', {}], ['judge-error', {}], ['fork', {}], ['easy', { JUDGE_ROUTER_CLAUDE_BIN: '/nonexistent/claude' }]]) {
+  for (const [name, extra] of [['unsure', {}], ['judge-error', {}], ['fork', {}], ['easy', { MODEL_JUDGE_CLAUDE_BIN: '/nonexistent/claude' }]]) {
     const { env } = baseEnv(extra);
     noHandoff(runHook(fixture(name), env));
   }
@@ -329,7 +329,7 @@ test('apply "input" (legacy, for Claude Code without hook modules): rewrites the
   const { dir, env } = baseEnv();
   const cfg = join(dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ apply: 'input' }));
-  const r = runHook(fixture('model-set-opus'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
+  const r = runHook(fixture('model-set-opus'), { ...env, MODEL_JUDGE_CONFIG: cfg });
   const o = JSON.parse(r.stdout);
   assert.equal(o.hookSpecificOutput.permissionDecision, undefined);
   const orig = JSON.parse(fixture('model-set-opus')).tool_input;
@@ -362,8 +362,8 @@ test('a different prompt is not served from the cache; cacheTtlMs 0 turns the ca
   const off = baseEnv();
   const cfg = join(off.dir, 'cfg.json');
   writeFileSync(cfg, JSON.stringify({ cacheTtlMs: 0 }));
-  runHook(fixture('hard'), { ...off.env, JUDGE_ROUTER_CONFIG: cfg });
-  runHook(fixture('hard'), { ...off.env, JUDGE_ROUTER_CONFIG: cfg });
+  runHook(fixture('hard'), { ...off.env, MODEL_JUDGE_CONFIG: cfg });
+  runHook(fixture('hard'), { ...off.env, MODEL_JUDGE_CONFIG: cfg });
   assert.equal(readFileSync(join(off.dir, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
 });
 

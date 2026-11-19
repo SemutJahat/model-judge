@@ -101,5 +101,5 @@ if (result?.modelUsage) {
 }
 console.log('');
 console.log(`session ${sessionId ?? '?'}; transcripts: ${subDir ?? '(not found)'}`);
-console.log(`judge-router log: ${join(run, 'log', 'decisions.jsonl')}`);
+console.log(`model-judge log: ${join(run, 'log', 'decisions.jsonl')}`);
 if (!calls.length) console.log('the main agent started no subagent: see ' + join(run, 'stream.jsonl'));

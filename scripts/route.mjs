@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// judge-router PreToolUse hook for the Agent (Task) tool.
+// model-judge PreToolUse hook for the Agent (Task) tool.
 // Reads the hook input on stdin; asks the judge; logs; prints a systemMessage for the user. With apply "spawn"
 // (default) it leaves its decision for hooks/register.ts, which applies it at agent.spawn; with apply "input"
 // (legacy) it prints updatedInput instead.
@@ -13,7 +13,7 @@ async function readStdin() {
 }
 
 try {
-  if (process.env.JUDGE_ROUTER_INNER === '1') process.exit(0);
+  if (process.env.MODEL_JUDGE_INNER === '1') process.exit(0);
   const raw = await readStdin();
   let hookInput;
   try { hookInput = JSON.parse(raw); } catch { process.exit(0); }

@@ -5,14 +5,14 @@
     "url": "https://github.com/SemutJahat"
   },
   "metadata": {
-    "description": "judge-router: a small judge model picks each Claude Code subagent's model and effort."
+    "description": "model-judge: a small judge model picks each Claude Code subagent's model and effort."
   },
   "plugins": [
     {
-      "name": "judge-router",
+      "name": "model-judge",
       "source": "./",
       "description": "Picks each subagent's model and effort with a small judge model, before it starts.",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }
