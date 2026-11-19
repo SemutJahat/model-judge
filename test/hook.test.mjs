@@ -58,6 +58,14 @@ function lastLog(dir) {
   return JSON.parse(lines.at(-1));
 }
 
+// Unchanged: no hookSpecificOutput at all (input and permission untouched), just the line for the user.
+function messageOnly(stdout, re) {
+  const o = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(o), ['systemMessage']);
+  assert.match(o.systemMessage, re);
+  return o.systemMessage;
+}
+
 function updated(stdout) {
   const o = JSON.parse(stdout);
   assert.equal(o.hookSpecificOutput.hookEventName, 'PreToolUse');
@@ -83,6 +91,23 @@ test('easy prompt -> haiku + low effort, rest of the input kept', () => {
   assert.equal(log.description, 'find a constant');
   assert.ok(log.prompt_head.startsWith('Find where MAX_RETRIES'));
   assert.ok(log.why);
+});
+
+test('override shows the user one line: verdict, model before -> after, effort, judge time', () => {
+  const { env } = baseEnv();
+  const o = JSON.parse(runHook(fixture('model-set-opus'), env).stdout);
+  assert.match(o.systemMessage, /^⚖ judge-router: "trivial but opus requested" → easy 0\.97 · opus→haiku · effort low \(\d+\.\ds\)$/);
+  assert.equal(o.hookSpecificOutput.permissionDecision, undefined);
+});
+
+test('display "off": no message, routing unchanged', () => {
+  const { dir, env } = baseEnv();
+  const cfg = join(dir, 'cfg.json');
+  writeFileSync(cfg, JSON.stringify({ display: 'off' }));
+  const o = JSON.parse(runHook(fixture('easy'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout);
+  assert.equal(o.systemMessage, undefined);
+  assert.equal(o.hookSpecificOutput.updatedInput.model, 'haiku');
+  assert.equal(runHook(fixture('unsure'), { ...env, JUDGE_ROUTER_CONFIG: cfg }).stdout, '');
 });
 
 test('hard prompt -> opus + high effort', () => {
@@ -150,7 +175,7 @@ test('judge missing (claude not found): unchanged, exit 0, logged', () => {
   const { dir, env } = baseEnv({ JUDGE_ROUTER_CLAUDE_BIN: '/nonexistent/claude' });
   const r = runHook(fixture('model-set-opus'), env);
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, '');
+  messageOnly(r.stdout, /judge-router: "trivial but opus requested" judge failed \(cli: .*ENOENT.*\) → left as opus/);
   const log = lastLog(dir);
   assert.equal(log.action, 'unchanged');
   assert.match(log.reason, /judge failed: cli: .*ENOENT/);
@@ -161,21 +186,21 @@ test('judge erroring (exit 1): unchanged, exit 0', () => {
   const { dir, env } = baseEnv();
   const r = runHook(fixture('judge-error'), env);
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, '');
+  messageOnly(r.stdout, /judge failed \(cli: claude -p exited 1/);
   assert.match(lastLog(dir).reason, /exited 1/);
 });
 
 test('judge answering without JSON: unchanged', () => {
   const { dir, env } = baseEnv();
   const r = runHook(fixture('judge-garbage'), env);
-  assert.equal(r.stdout, '');
+  messageOnly(r.stdout, /judge failed \(cli: judge reply has no JSON object\)/);
   assert.match(lastLog(dir).reason, /no JSON object/);
 });
 
 test('judge unsure (confidence 0.4 < 0.75): unchanged, verdict still logged', () => {
   const { dir, env } = baseEnv();
   const r = runHook(fixture('unsure'), env);
-  assert.equal(r.stdout, '');
+  messageOnly(r.stdout, /^⚖ judge-router: "vague task" unsure 0\.40 \(medium\?\) → left as default \(\d+\.\ds\)$/);
   const log = lastLog(dir);
   assert.equal(log.action, 'unchanged');
   assert.equal(log.confidence, 0.4);
@@ -188,14 +213,14 @@ test('judge too slow: unchanged after the timeout, exit 0', () => {
   writeFileSync(cfg, JSON.stringify({ timeoutMs: 1500 }));
   const r = runHook(fixture('judge-slow'), { ...env, JUDGE_ROUTER_CONFIG: cfg });
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, '');
+  messageOnly(r.stdout, /judge failed \(cli: claude -p timed out after \d+ ms\)/);
   assert.ok(r.ms < 4500, `took ${r.ms} ms`);
   assert.match(lastLog(dir).reason, /timed out/);
 });
 
 test('fork: left alone (Claude Code ignores model/effort for forks)', () => {
   const { dir, env } = baseEnv();
-  assert.equal(runHook(fixture('fork'), env).stdout, '');
+  messageOnly(runHook(fixture('fork'), env).stdout, /"a fork" skipped \(fork\) → left as default/);
   assert.match(lastLog(dir).reason, /fork/);
 });
 
@@ -221,7 +246,7 @@ test('CLAUDE_CODE_EFFORT_LEVEL pins effort: model set, effort not added', () => 
 
 test('CLAUDE_CODE_SUBAGENT_MODEL_FORCE: the tool has no model field, left alone', () => {
   const { env } = baseEnv({ CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' });
-  assert.equal(runHook(fixture('easy'), env).stdout, '');
+  messageOnly(runHook(fixture('easy'), env).stdout, /skipped \(CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set\)/);
 });
 
 test('config file changes the mapping and the judge model', () => {

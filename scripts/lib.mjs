@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG = {
   timeoutMs: 15000,
   maxPromptChars: 6000,
   setEffort: true,
+  display: 'all',
   claudeBin: 'claude',
   routes: {
     easy: { model: 'haiku', effort: 'low' },
@@ -207,7 +208,17 @@ export function fieldsAllowed(env = process.env) {
 }
 
 // Returns { output, log }: output is the hook's stdout object (or null for "leave unchanged").
-export async function decide(hookInput, { env = process.env, cfg = loadConfig(env), judge = askJudge } = {}) {
+// Returns { output, log }: output is the hook's stdout object, or null for "say and change nothing".
+// When config.display allows it, output carries a systemMessage: the one line Claude Code shows the user.
+export async function decide(hookInput, opts = {}) {
+  const cfg = opts.cfg ?? loadConfig(opts.env ?? process.env);
+  const r = await decideCore(hookInput, { ...opts, cfg });
+  const message = formatMessage(r.log, cfg);
+  if (message) r.output = { ...(r.output ?? {}), systemMessage: message };
+  return r;
+}
+
+async function decideCore(hookInput, { env = process.env, cfg = loadConfig(env), judge = askJudge } = {}) {
   const tool = hookInput?.tool_name;
   const input = hookInput?.tool_input;
   const log = {
@@ -221,13 +232,14 @@ export async function decide(hookInput, { env = process.env, cfg = loadConfig(en
     model_before: input?.model ?? null,
     effort_before: input?.effort ?? null,
   };
-  const unchanged = (reason, extra = {}) => ({
+  // status says why it is unchanged: guard | not-agent | skipped | failed | unsure (the message differs).
+  const unchanged = (reason, extra = {}, status = 'skipped') => ({
     output: null,
-    log: { ...log, ...extra, action: 'unchanged', reason, model_after: log.model_before, effort_after: log.effort_before },
+    log: { ...log, ...extra, action: 'unchanged', status, reason, model_after: log.model_before, effort_after: log.effort_before },
   });
 
-  if (env.JUDGE_ROUTER_INNER === '1') return unchanged('inside the judge itself (recursion guard)');
-  if (!SUBAGENT_TOOLS.has(tool) || !input || typeof input !== 'object') return unchanged(`not a subagent tool: ${tool}`);
+  if (env.JUDGE_ROUTER_INNER === '1') return unchanged('inside the judge itself (recursion guard)', {}, 'guard');
+  if (!SUBAGENT_TOOLS.has(tool) || !input || typeof input !== 'object') return unchanged(`not a subagent tool: ${tool}`, {}, 'not-agent');
   if (typeof input.prompt !== 'string' || !input.prompt.trim()) return unchanged('subagent has no prompt');
   if (input.subagent_type === 'fork') return unchanged('fork: Claude Code ignores model and effort for forks');
   const allowed = fieldsAllowed(env);
@@ -235,11 +247,11 @@ export async function decide(hookInput, { env = process.env, cfg = loadConfig(en
 
   const r = await judge(input, cfg, env);
   const jlog = { judge: r.judge ?? null, judge_ms: r.ms };
-  if (r.error) return unchanged(`judge failed: ${r.error}`, jlog);
+  if (r.error) return unchanged(`judge failed: ${r.error}`, jlog, 'failed');
   const { difficulty, confidence, why } = r.verdict;
   Object.assign(jlog, { difficulty, confidence, why });
   if (confidence < cfg.confidenceThreshold) {
-    return unchanged(`judge unsure: confidence ${confidence} < ${cfg.confidenceThreshold}`, jlog);
+    return unchanged(`judge unsure: confidence ${confidence} < ${cfg.confidenceThreshold}`, jlog, 'unsure');
   }
   const route = cfg.routes[difficulty] || {};
   const model = toModelAlias(route.model);
@@ -261,11 +273,46 @@ export async function decide(hookInput, { env = process.env, cfg = loadConfig(en
     log: {
       ...log, ...jlog,
       action: 'override',
+      status: 'override',
       model_after: model,
       effort_after: effort ?? log.effort_before,
       ...(cfg.setEffort && !allowed.effort ? { note: 'CLAUDE_CODE_EFFORT_LEVEL pins effort: effort left alone' } : {}),
     },
   };
+}
+
+// ---- what the user sees ----------------------------------------------------------------------
+
+// display: "all" (every decision, default) | "changes" (only when the model or effort changed, or the judge
+// failed) | "off". Returns the one-line message, or undefined for none.
+export function formatMessage(log, cfg = DEFAULT_CONFIG) {
+  const mode = cfg.display ?? 'all';
+  if (mode === 'off' || mode === false) return undefined;
+  if (log.status === 'guard' || log.status === 'not-agent' || !log.status) return undefined;
+  const name = `"${clip(log.description || 'subagent', 48)}"`;
+  const before = log.model_before ?? 'default';
+  const secs = typeof log.judge_ms === 'number' ? ` (${(log.judge_ms / 1000).toFixed(1)}s)` : '';
+  const conf = typeof log.confidence === 'number' ? log.confidence.toFixed(2) : '';
+  if (log.status === 'override') {
+    const changed = log.model_after !== log.model_before || log.effort_after !== log.effort_before;
+    if (mode === 'changes' && !changed) return undefined;
+    const effort = log.effort_after ? ` · effort ${log.effort_after}` : '';
+    return `⚖ judge-router: ${name} → ${log.difficulty} ${conf} · ${before}→${log.model_after}${effort}${secs}`;
+  }
+  if (log.status === 'unsure') {
+    if (mode === 'changes') return undefined;
+    return `⚖ judge-router: ${name} unsure ${conf} (${log.difficulty}?) → left as ${before}${secs}`;
+  }
+  if (log.status === 'failed') {
+    return `⚖ judge-router: ${name} judge failed (${clip(String(log.reason).replace(/^judge failed: /, ''), 80)}) → left as ${before}${secs}`;
+  }
+  if (mode === 'changes') return undefined;
+  return `⚖ judge-router: ${name} skipped (${clip(String(log.reason).split(':')[0], 60)}) → left as ${before}`;
+}
+
+function clip(s, n) {
+  s = String(s).replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 export function writeLog(entry, env = process.env) {

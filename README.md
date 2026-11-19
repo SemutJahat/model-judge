@@ -17,6 +17,9 @@ It needs nothing besides Claude Code and Node: the judge runs on your own Claude
   set from the route of that difficulty.
 - It sets no `permissionDecision`. The call still goes through Claude Code's normal permission check, and the
   hook neither approves nor denies anything.
+- It shows you one line per subagent call (its verdict and the model and effort it set), adds a
+  `/judge-router:log` command, and ships an optional status line. See
+  [Seeing what the judge does](#seeing-what-the-judge-does).
 
 Default routes (in `config.json`):
 
@@ -70,6 +73,98 @@ Each routed subagent waits for one judge call before it starts. Measured on this
 3.07 s wall, of which the model took 2.0 s (`duration_ms`). The API path skips the CLI's start-up and should be
 faster, but no API key was available here to time it.
 
+## Seeing what the judge does
+
+Three views. All of them run without enowX, and none touches the decision or the permission check.
+
+### 1. A line under each subagent call (on by default)
+
+The hook adds a `systemMessage` to its answer. Claude Code 2.1.328 shows a PreToolUse hook's `systemMessage`
+to the user right under the tool call, as `PreToolUse:Agent says: …`. This was captured from a real interactive
+session (`claude --plugin-dir … --permission-mode default`, run in a pseudo-terminal), where one prompt
+started four subagents, all requesting `sonnet`:
+
+```
+⏺ 4 background agents launched (↓ to manage)
+   ├ Agent (count words)
+   ├ Agent (slugify with tests)
+   ├ Agent (rate limiter design)
+   └ Explore (vague task)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "count words" → easy 0.97 · sonnet→haiku · effort low (3.4s)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "slugify with tests" → medium 0.85 · sonnet→sonnet · effort medium (2.7s)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "rate limiter design" → hard 0.85 · sonnet→opus · effort high (4.3s)
+  ⎿  PreToolUse:Agent says: ⚖ judge-router: "vague task" unsure 0.40 (easy?) → left as sonnet (3.5s)
+```
+
+The subagents' transcripts confirm it: `count words` ran on `claude-haiku-5-5` (effort low), `slugify with tests`
+on `claude-sonnet-5-5` (medium), `rate limiter design` on `claude-opus-5-5` (high), and `vague task` stayed on
+`claude-sonnet-5-5` with no effort set.
+
+The other forms of the line:
+
+```
+⚖ judge-router: "x" judge failed (cli: claude -p timed out after 15000 ms) → left as sonnet (15.0s)
+⚖ judge-router: "x" skipped (fork) → left as default
+```
+
+`"display"` in `config.json` sets how much it says:
+- `"all"` (default): every decision.
+- `"changes"`: only when the model or effort changed, or the judge failed.
+- `"off"`: nothing; the log still records everything.
+
+When the input is left unchanged, the hook prints only `{"systemMessage": …}`, with no `hookSpecificOutput`.
+
+### 2. `/judge-router:log [N]`, and the same in a terminal
+
+The plugin adds a slash command, `/judge-router:log`. It runs `scripts/log.mjs` and shows the last N decisions,
+10 by default. It runs `node` only, which its `allowed-tools` frontmatter permits, so it asks for no permission.
+Captured from the interactive session:
+
+```
+❯ /judge-router:log
+⏺ time      subagent                      verdict  conf  model              effort         judge   result
+  ────────  ────────────────────────────  ───────  ────  ─────────────────  ─────────────  ──────  ─────────
+  22:44:07  count words                   easy     0.97  sonnet→haiku       -→low          3.4s    override
+  22:44:08  slugify with tests            medium   0.85  sonnet→sonnet      -→medium       2.7s    override
+  22:44:09  vague task                    easy     0.40  sonnet→sonnet      -              3.5s    unsure
+  22:44:09  rate limiter design           hard     0.85  sonnet→opus        -→high         4.3s    override
+  (4 of 4, from …/decisions.jsonl)
+```
+
+(The test session logged to a temp folder, so its path is shortened here.)
+
+The command's output reaches the model, which then repeats it to you. That costs one short model turn.
+In a terminal, with no model involved:
+
+```sh
+node ~/Script/claude-judge-router/scripts/log.mjs            # last 10 (or: log.mjs 25, -n 25)
+node ~/Script/claude-judge-router/scripts/log.mjs --watch    # then follow new decisions live, in another terminal
+node ~/Script/claude-judge-router/scripts/log.mjs --session SESSION_ID --json
+```
+
+### 3. Status line (opt-in)
+
+`scripts/statusline.mjs` shows the current session's latest decision under the prompt. It prints nothing until
+the session's first subagent. Captured at the bottom of the interactive session above:
+
+```
+❯
+───────────────────────────────────────────
+  ⚖ opus/high · hard 0.85 · "rate limiter design"
+```
+
+The other forms: `⚖ sonnet (unsure 0.40) · "vague task"`, `⚖ default (judge failed)`. Nothing sets this up
+for you. To opt in, add this line to your `~/.claude/settings.json`:
+
+```json
+"statusLine": { "type": "command", "command": "node ~/Script/claude-judge-router/scripts/statusline.mjs" }
+```
+
+To try it for one session without editing any settings file:
+`claude --plugin-dir ~/Script/claude-judge-router --settings '{"statusLine":{"type":"command","command":"node ~/Script/claude-judge-router/scripts/statusline.mjs"}}'`.
+If you already have a status line, call both from one command, and pass the same stdin to each:
+`sh -c 'i=$(cat); printf %s "$i" | your-statusline; printf " "; printf %s "$i" | node …/statusline.mjs'`.
+
 ## Try it yourself
 
 None of these install anything. They use the plugin straight from this folder.
@@ -114,8 +209,13 @@ node examples/dry-run.mjs --json --file examples/prompts/hard.md            # th
 It runs the same `decide()` as the hook, with the same config, judge and threshold. It prints the verdict and the
 model and effort it would set, and writes nothing to the log unless you pass `--log`.
 
+**Watching while you try.** In an interactive session, each subagent call shows its judge-router line (see
+[Seeing what the judge does](#seeing-what-the-judge-does)). Type `/judge-router:log` for the table, or keep
+`node scripts/log.mjs --watch` running in a second terminal.
+
 **Reading the log.** Every subagent the hook sees in a normal session adds a line to
-`~/.claude/judge-router/decisions.jsonl` (the demo writes to its temp folder instead):
+`~/.claude/judge-router/decisions.jsonl` (the demo writes to its temp folder instead). Use `node scripts/log.mjs`
+for a table, or `jq` for the raw lines:
 
 ```sh
 jq -c '{ts, description, difficulty, confidence, model: "\(.model_before) -> \(.model_after)", effort_after, action, reason}' ~/.claude/judge-router/decisions.jsonl | tail
@@ -171,6 +271,7 @@ file below.
   "timeoutMs": 15000,
   "maxPromptChars": 6000,                // the prompt is cut to this before it goes to the judge
   "setEffort": true,
+  "display": "all",                      // the line under each subagent call: "all" | "changes" | "off"
   "routes": { "easy": {...}, "medium": {...}, "hard": {...} }
 }
 ```
@@ -198,7 +299,8 @@ Every decision is one JSON line in **`~/.claude/judge-router/decisions.jsonl`** 
  "action":"override","model_after":"haiku","effort_after":"low"}
 ```
 
-`action` is `override` or `unchanged`, and an unchanged line has a `reason`. `prompt_head` is the prompt's first
+`action` is `override` or `unchanged`. `status` is `override`, `unsure`, `failed` or `skipped`, and an
+unchanged line has a `reason`. `prompt_head` is the prompt's first
 200 characters.
 
 ```sh
@@ -208,14 +310,16 @@ tail -f ~/.claude/judge-router/decisions.jsonl | jq -c '{description, difficulty
 ## Tests
 
 ```sh
-npm test            # node --test test/: 28 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
+npm test            # node --test test/: 40 tests, the judge stubbed (test/fixtures/fake-claude.mjs, a local fake Messages API)
 ./test/real-run.sh  # the real check below, costs a few cents (same machinery as examples/demo.sh)
 ```
 
 The unit tests cover: easy, medium and hard prompts; a model and effort already set and then overridden;
 `Task` as the tool name; the judge's flags, temp folder and recursion guard; the judge missing, failing,
 answering garbage, unsure or too slow; forks and other tools; `CLAUDE_CODE_EFFORT_LEVEL` and
-`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`; config overrides; the API path and its fallback to `claude -p`.
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`; config overrides; the API path and its fallback to `claude -p`; the line
+shown to the user in each case and each `display` mode; the status line text; the `log.mjs` table, its
+`--session` and `--json` options and an empty log.
 
 ### Real run (evidence)
 
