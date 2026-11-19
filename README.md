@@ -342,6 +342,10 @@ claude plugin list                     # model-judge@semutjahat … Scope: user 
 ```
 
 Or at the Claude Code prompt: `/plugin install model-judge --marketplace SemutJahat/model-judge`.
+
+The same marketplace also lists **[rag-first](https://github.com/SemutJahat/rag-first)**, which makes Claude
+Code search the project's enowx-rag RAG before it greps or reads around:
+`claude plugin install rag-first@semutjahat --scope user`.
 New sessions load the plugin; sessions that are already open don't. It needs Claude Code with hook modules
 (2.1.328 has them; see [Older Claude Code](#auto-mode-why-the-call-is-not-rewritten)), Node on the PATH, and
 your Claude Code login, which the judge uses.

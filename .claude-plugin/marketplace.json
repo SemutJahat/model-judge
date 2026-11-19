@@ -5,7 +5,7 @@
     "url": "https://github.com/SemutJahat"
   },
   "metadata": {
-    "description": "model-judge: a small judge model picks each Claude Code subagent's model and effort."
+    "description": "SemutJahat's Claude Code plugins: model-judge (a small judge model picks each subagent's model and effort) and rag-first (search the project's RAG before grepping)."
   },
   "plugins": [
     {
@@ -13,6 +13,15 @@
       "source": "./",
       "description": "Picks each subagent's model and effort with a small judge model, before it starts.",
       "version": "0.3.0"
+    },
+    {
+      "name": "rag-first",
+      "source": {
+        "source": "github",
+        "repo": "SemutJahat/rag-first"
+      },
+      "description": "Makes Claude Code search the project's enowx-rag RAG before it greps or reads around.",
+      "version": "0.1.0"
     }
   ]
 }
