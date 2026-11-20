@@ -21,7 +21,7 @@
         "repo": "SemutJahat/rag-first"
       },
       "description": "Makes Claude Code search the project's enowx-rag RAG before it greps or reads around.",
-      "version": "0.2.0"
+      "version": "0.2.1"
     }
   ]
 }
